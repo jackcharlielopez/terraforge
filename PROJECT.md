@@ -1,0 +1,447 @@
+# TerraForge: Living Project Doc
+
+> Update this file whenever a decision is made, scope changes, or an open question is answered.
+> Add a line to the Changelog at the bottom with the date.
+
+## Goal
+A browser-only tool for surveyors. Upload a point file (`P,N,E,Z,D` text) and get a DXF, with an
+on-screen preview first. Everything runs client-side so it can be hosted on GitHub Pages.
+
+Status: **Phase 1 built (2026-11-05), not yet reviewed by a surveyor.** Upload -> parse -> classify -> preview -> download works
+in the browser; 266 tests pass; not yet opened in AutoCAD/Civil 3D. See "Phase 1 status" below.
+
+## Decisions
+| Area | Decision |
+|---|---|
+| Stack | Vite + React 19 + TypeScript, client-side only |
+| Hosting | Frontend stays static and deployable to GitHub Pages (`base: '/terraforge/'`, workflow on push to `main`). Update 2026-11-05: Docker locally is also fine, so an optional backend is allowed later (see below) |
+| Backend (optional, later) | Small service in Docker for what a static site can't do: AI key handling, parcel/GIS requests that fail CORS, deed OCR/parsing. The POC itself needs none |
+| Repo | https://github.com/jackcharlielopez/terraforge (see Open items) |
+| Theme | TerraForge AI tokens (green `#1C3D2E`, amber `#D4900A`, paper `#F7F8F6`), DM Sans; see `src/index.css` |
+| Input | `P,N,E,Z,D`, comma-delimited, no header. Custom line parser (descriptions can contain `"`, e.g. `IE 12"PIPE`) |
+| Bad lines | Skip and show a warning list with line numbers; never fail the whole file |
+| Linework | Lines run through shots of one kind taken one after another; ditch banks run beside the centreline; no crossings; syntax per firm (see "Phase 1 status" and "Linework syntax per firm") |
+| Code dictionary | CHANGED 2026-11-06: no user-facing dictionary. Dictionary upload, the Settings editor, the recognised/unrecognised code panels, the sync banner and the linework settings were removed. The starter table is built-in knowledge and `src/lib/rules.ts` decides the rest from conditions on the description (see "No dictionary: built-in rules"). Older sections below that describe those screens are history |
+| Multi-code points | `GUTTER/EP/GAS` is placed on **every** matching layer. `3'O/S` and `C/L` are not split on `/` |
+| AI code classification | Design for it, build later. Classifier is a swappable interface; the unknown-code review UI ships in the POC |
+| Preview | Pan/zoom with layer toggles, then download |
+| DXF writer | Own ASCII writer, no runtime dependency. CHANGED 2026-11-05: writes AutoCAD **R12 (AC1009)** instead of R2000. R12 needs no entity handles/subclass markers, so it is much harder to get subtly invalid, and every CAD/GIS tool opens it. Polylines are 3D POLYLINE/VERTEX. Revisit if a surveyor needs R2000+ features |
+| DXF contents | 3D points (Z = elevation) on `PNTS`; number/elevation/description on `PNTNO`/`PNTELEV`/`PNTDESC`; feature layers use AIA-style `V-*` names |
+
+## Reference material
+- `samples/`: example point files (the Job A `.txt`, copied in)
+- `reference/job-a.dxf`: finished DXF the output should resemble
+- `reference/DXF-NOTES.md`: analysis of the reference (point pattern, layers, code→layer mapping)
+
+## Out of scope for the POC
+Title block, viewports, legend, north arrow, scale bar, building outlines (they come from offset shots and tape ties, see
+"Geometry as a lens"), closure/legal description, ALTA checklist, datum conversion, other input formats (RW5, FBK, etc.), AI
+classification itself. (Bearing/distance labels, area and the property line are built, from ticked pins.)
+
+## Phase 1 status (2026-11-05)
+Code map (`src/lib/`): `parse.ts` (tolerant P,N,E,Z,D parser), `codes.ts` (starter dictionary, layers/colours from the reference,
+description splitting/matching), `linework.ts` (connect-by-shared-code), `dxf.ts` (R12 writer), `classifier.ts` (AI seam, no-op for
+now), `aci.ts` (preview colours). UI: `App.tsx` (upload, layers, code review, download), `components/Preview.tsx` (SVG pan/zoom).
+Run `npm test`, `npm run dev`, `npm run build`.
+
+Verified: sample file parses with 0 warnings (202 points); DXF round-trips through `dxf-parser`; point positions on `PNTS` match
+`job-a.dxf` (all but the drafter's 3 the drafter's initials points and point 148); browser run via Playwright: upload, 202 markers, 10 lines,
+zoom/pan/labels, teaching an unknown code, and DXF download all work, no console errors.
+
+Behaviour to know:
+- Each point -> circle (r 0.5) + POINT on `PNTS` at true Z, text (height 1.0) on `PNTNO`/`PNTELEV`/`PNTDESC`, and one extra POINT on
+  every matching feature layer ("every matching layer"). Codes with no entry go to `V-NODE`.
+- Linework is only an approximation, built the way the original TerraForge AI artifact did it: **a line runs through shots of one kind taken one after another**
+  and breaks when another kind of shot comes between (default "strict"), after `END`, and across a gap (default 100 units). Settings: *line discipline* in
+  Recognised codes (Strict = 0 interruptions, Relaxed = up to 3, Loose = anywhere), and per-code overrides in the dictionary (`maxSkip`, `maxGap`; Settings → Skip/Gap).
+  Starter exceptions: TOP and CLD tolerate 8 interleaved shots (ditch banks are shot zig-zag), PP E-T is effectively unlimited (poles are sparse) and has its own
+  gap of 400. EP/FOC/BOC/GUTTER share one "road-edge" line. `3'O/S` offset shots are never connected.
+- **Field codes the user can put in a description** (whole words, anywhere, e.g. `EP BEG` or `END /FOC/EP`): `END` finish the line here; `BEG`/`BEGIN` start a
+  new line here; `CLO`/`CLS`/`CLOSE` close the line back to its first point. A number straight after a code (`BLDG1`, `BLDG2`, `EP 3`) makes separate lines, and a
+  numbered code with `closeNumbered` (BLDG) closes into a polygon. If a dictionary defines BEG/CLO/etc. as codes of its own, they stay codes.
+- **Lines do not cross (default on, "Don't let lines cross each other" in Recognised codes; `avoidCrossings` in the dictionary).** After the lines are built, segments that
+  cross other lines are dropped: repeatedly the segment in the most crossings, the longer one on a tie, then the remainder is re-assembled (`removeCrossings`, `src/lib/geometry.ts`).
+  Crossings are checked across ALL layers. Lines flagged `mayCross` (code column "May cross": overhead power, pipes, property lines) are exempt, matching how the drafter's drawing
+  behaves (apart from the property line, essentially none of the drafter's point-to-point lines cross). Cost on the sample: recall 61% -> 57%, precision 59% -> 61%. The Layers
+  panel says how many segments were left out and how many crossings remain; Compare shows ours vs the reference (reference counted without property/utility layers: 1).
+  Known weakness: the greedy choice can drop a correct segment (5 of 12 here) and keep a wrong one (e.g. a long diagonal ditch-top jump that happens not to cross anything).
+- On the sample, 5 codes stay unrecognised on purpose for review: X, EG, STK, `IE 12"PIPE`, INT. (`BASE`, from `IPF#1670/BASE`, is now a recognised code: a GPS base set on that pin, no line, layer V-NODE.)
+- The code table is a **code book** (a surveyor's dictionary): a JSON file, version 1 (`src/lib/codebook.ts` documents the shape). The built-in starter
+  is `src/data/starter-codes.json` (27 codes, 16 layers). The **gear** (bottom of the left panel, across from the profile placeholder) opens Settings:
+  add/edit/delete codes and layers, pick layer colours, import / export / reset the dictionary. One filter box narrows both the codes and layers tables.
+  Edits save automatically in browser localStorage (`terraforge.codebook.v1`), per browser, not per job; export a file to keep or share one.
+  Import validates strictly: bad entries are skipped with a warning, a wrong format/version is rejected, unexpected fields are dropped.
+  Importing REPLACES the dictionary (it does not merge), so codes missing from the imported file become "unrecognised".
+- **Layer colours:** pick any colour (picker or hex). The preview shows it exactly. The DXF is R12, which stores only AutoCAD's 255 index colours (ACI),
+  so the DXF gets the nearest ACI (shown beside the hex). A layer stores `aci` (what the DXF uses) and optionally `hex`; either alone is accepted on import.
+- **Layout:** with no data, an upload card sits over the canvas with three slots (survey points, layer/code dictionary, deed). Files can be chosen per slot or
+  dropped anywhere on the canvas, several at once; they are sorted by extension (.txt/.csv points, .json dictionary, .pdf/image deed). Once points load, a
+  left panel slides in with collapsible accordions (Files, Skipped lines, Layers, Unrecognised codes, Recognised codes, Deed); a handle shrinks it. The panel never
+  disappears: shrunk, it is a 56px icon strip with the profile icon stacked above the gear (icons only), also shown before any file is loaded. Open, the
+  profile ("Guest / Not signed in") and the gear sit side by side at the bottom of the panel. One filter box at the top narrows all of its lists. The
+  profile is a **placeholder** (no accounts exist, it is not a button); the gear is a separate control.
+- **Compare DXF:** any `.dxf` (e.g. `reference/job-a.dxf`) can be loaded in a fourth slot, by itself or together with the points. It is read in the browser
+  (`src/lib/dxfview.ts`, parser `dxf-parser`, loaded lazily) and drawn under our drawing: Ours / Reference / Both switch, reference layer toggles,
+  dashed blue when overlaid. "Fit" frames the survey (not a far-off legend), "Show all" frames everything. Comparison stats (`src/lib/compare.ts`):
+  point positions, and line segments between two survey points (default settings on the sample: reference 106, we draw 120, 66 shared = 62% / 55%).
+  Limits: draws POINT, LINE, LWPOLYLINE, POLYLINE, CIRCLE, ARC, TEXT, MTEXT and block contents; NOT leaders, images, tables, hatches, splines; curved
+  polyline segments appear straight; paper space (title block, viewports) is ignored. dxf-parser drops block attributes, so point numbers / elevations /
+  descriptions are recovered with a small raw scan of the file. The reference itself contains 5 stray POINTs at exactly (0,0); they are left out of the fit.
+- **Deed:** can be attached (kept in memory for the tab only, not uploaded, not saved, gone on reload) but is NOT read yet; that is Phase 3.
+- "Layer file" in the UI means the code dictionary JSON; the app does not read DXF/CAD layer files.
+
+## Where the sample job stands (2026-11-05, end of day)
+Shipped defaults (strict discipline + ditch/pole exceptions, ditch banks, crossing removal, CRAWL SPACE / STEPS / NEW CONC / AC PAD connect): drawn 108, correct 74, **precision 69%, found 70%** of the
+106 point-to-point drafter segments, 0 crossings. With the four property pins ticked: drawn 112, correct 78, **precision 70%, found 74%**. As a share of ALL 243 drafter segments (incl. computed geometry) that is 32%.
+Still missed (28 point-to-point): 17 join shots separated by other kinds of shots (9 are TOP/TOP bank joins, the rest CONC/CLD/EP), 6 are consecutive shots a rule drops (TOP, FOC, offset pairs), 5 close a run (CONC, EP).
+"85%" needs a definition: 85% of the point-to-point segments is 91 correct (13 more than now, plausible with more TOP/CONC work but increasingly fitted to one job); 85% of all drafter segments is ~207 correct, which is
+impossible from the codes alone because 138 segments (91 building outlines, easements, setbacks, pipes) are computed from offsets, the deed and utility records.
+**Points that touch no line are mostly correct:** the drafter's own drawing leaves 76 of 202 points (38%) on no line (17 X spot grades, 9 TOE, stakes, valves, meters...). Ours leaves 73; 58 of those the drafter also left alone, 15 were real misses
+(mostly the four codes now connected). Lines through no survey point (41 of the drafter's 112) are building outlines, setbacks, easements, pipes and some concrete: drafted from offsets/records, never produced by us.
+
+## Linework accuracy vs the drafter's drawing (history of the measurements)
+Method: compare segments between the same two survey points (`job-a.dxf` has ~106 such segments; the other ~140 involve computed geometry: building outlines from offsets, property/setback/easement lines, utility pipes).
+Pinned by `src/lib/linework.reference.test.ts` (floors: found >= 67%, precision >= 66%, no crossings).
+| Settings | Segments drawn | Correct | Drafter segments found |
+|---|---|---|---|
+| First defaults (CONC off, one global 100-unit gap) | 78 | 42 | 40% |
+| CONC connect on | 117 | 64 | 60% |
+| + per-code gap 400 for power poles | 120 | 66 | 62% |
+| Strict line discipline + ditch/pole exceptions, before crossing removal | 111 | 65 | 61% (precision 59%). **CORRECTION: I first reported "crossings 3 (was 7)", but that counted only same-layer crossings. Across all layers it was 28 (25 between layers), mostly ditch-top lines cutting across the ditch centreline.** |
+| + crossing removal | 99 | 60 | 57% (precision 61%, crossings 0; dropped 12 segments, about 7 wrong and 5 right) |
+| + ditch banks (TOP beside CLD) | 103 | 70 | 66% (precision 68%, crossings 0) |
+| + CRAWL SPACE / STEPS / NEW CONC / AC PAD connect (**shipped defaults**) | 108 | 74 | 70% (precision 69%, crossings 0) |
+| + four property pins ticked | 112 | 78 | 74% (precision 70%) |
+Experiments: strictly consecutive everywhere = precision 63% but only 54% found; merging vs splitting EP/FOC/BOC/GUTTER into one line per code made no difference; chaining by nearest neighbour instead of point number was equal or worse.
+Per-code exceptions (ditch codes tolerate 8 interleaved shots, poles unlimited) are domain-plausible but were chosen with one job in mind: check them on more jobs. A global gap of 40 instead of 100 gave 0 crossings and 61% precision at the same recall
+before crossing removal; NOT adopted (one job; spacing differs urban vs rural): it is the "Start a new line after a gap over" setting.
+
+## Patterns in the drafter's linework (mined from one job, so hypotheses, not rules)
+- Shots of different kinds next to each other were joined 1 time in 85 (1%): strong support for the strict "one kind after another" rule.
+- Shots of the same code next to each other were joined only 55% of the time, and the description gives no signal (identical text 54%, differing text 66%). Same-code consecutive shots more than 40 ft apart were joined 1 of 8 times
+  (12%) vs ~60% under 40 ft.
+- Of the 46 drafter segments an early download missed: 35 joined shots separated by other kinds of shots, 8 were consecutive shots of codes the starter left unconnected, 3 closed a run. Only 1 of the drafter's lines is a closed shape (the septic tank).
+- **Retracted:** `EG` looked like an END-style terminator (always at "line ends"), but that is an artifact: the drafter draws the sidewalk as separate 2-point LINE entities, so every point looks like an end. The only terminator in the file is the literal `END` (2 points: too few to validate).
+- Conclusion: codes and order explain roughly half to two thirds of the drafter's point-to-point lines; the rest needs geometry or user input.
+
+## Closing the gap to the finished drawing (after the overlay review)
+Of the drafter's 251 model-space segments, 113 run between survey points and 138 are computed geometry (building outlines 91, sidewalk 22, ditch 13, the rest property/easement/pipes).
+- **Text bug fixed:** the reference is AutoCAD 2018 (UTF-8) but was decoded as Windows-1252, so degree signs showed as `Â°`. `decodeDxf` picks the encoding from `$ACADVER` (AC1021+ = UTF-8); `%%d`/`%%p`/`%%c` become symbols.
+- **Ditch banks (`alongside`):** a code can run alongside another line (starter: TOP beside CLD). Its points are split to the left/right of the nearest stretch of that line (within 60 ft) and each side is run in order along it, so a bank cannot
+  zig-zag across the centreline. Points too far away fall back to the normal rules. Settings column "Beside". Found 61% -> 66%, precision 59% -> 68% with crossing removal.
+- **Boundary (property line) from ticked pins:** the Boundary section lists pins whose code is flagged `boundary` (IPF, IPS, CONC MNT FND). "Suggest" ticks the pins sharing the most common cap number (`#1670`) plus any pins set on the job; the pins are
+  ordered around their centre; the closed `V-PROP` line, area, perimeter, courses and rotated bearing/distance labels (layer BRGTXT, `%%d` in the DXF) are drawn. On the sample, pins 100, 123, 250, 209 reproduce the plat exactly: **36,242 sq ft =
+  0.83 acres, courses 241.54' / 149.98' / 241.72' / 150.00' with matching bearings**, and add exactly the drafter's 4 property-line segments. The suggestion is deliberately NOT applied automatically: pin 102 has the same cap number and lies on the same
+  line, and including it gives a wrong 45,300 sq ft pentagon. No rule can tell 100 (a corner) from 102 (not); the surveyor or the deed must.
+- **Next biggest gap: building outlines** (91 computed segments); see "Geometry as a lens" for what the points can and cannot give.
+
+## Geometry as a lens: rectilinear shapes and connectivity (measured 2026-11-05, one job)
+(My first pass used a wrongly estimated axis and reported "2% axis-aligned"; redone against the lot's own axis, pin 100 to 123.)
+- **Man-made features are rectilinear, natural ones are not.** Share of segments within 3 degrees of the lot axes: sidewalk 95%, road edge 83%, property 80%, driveway 70%, buildings 57% on that one axis because buildings have TWO orientations
+  (0 and +8 degrees from the lot axis; every one of the 87 building walls is within 2 degrees of one of the two), ditch top 34%, ditch centreline 28%. So "each structure is a rectangle" holds per structure after grouping by orientation, not against one global axis.
+- **Lines connect.** Of 264 drafter segment endpoints, 188 (71%) are shared with another segment, 29 (11%) land on the middle of another line (T-junction), only 47 (18%) are free ends.
+- **As a FILTER on our guesses, axis-alignment is weak:** within 6 degrees of an axis, our right lines 61% vs our wrong lines 41% (sidewalk only: right 17/25 vs wrong 6/16). It is a constraint for building shapes, not a good detector of bad joins.
+- **Offset shots encode walls exactly:** 17 of the 18 offset shots (`3'O/S BLDG`, `CONC 2'OFF BLDG`, `BOC 1.5'OFF HSE`...) sit at the stated offset (3.0, 2.0, 1.5 ft, +/- 0.1) from a wall the drafter drew. **But only 13 of the drafter's 95
+  building/porch/deck walls (14%) have any offset shot near them**, so most walls were drafted from other information (tape ties, closure, a field sketch); building footprints cannot be rebuilt from the points file alone.
+- Options: (a) draw the wall line implied by each offset shot, moved by its stated offset toward the building (exact, ~14% of building walls; direction needs the building interior: finished-floor point or a user flip); (b) a user "structure" input
+  (two corners plus a depth, or typed width/depth) with orthogonal snapping; (c) QA flags for man-made lines that are off-axis or have a free end; (d) learn-from-a-finished-drawing for onboarding.
+
+## Lines do not double back (found from the user's overlay, 2026-11-05)
+Observation (user): our lines fold back on themselves, which real survey linework rarely does. Measured: wherever exactly two of the drafter's segments meet (162 places, counting separate 2-point LINEs): 94 are square corners (80-100 degrees), 60 are straight,
+7 are gentle bends, and 1 is under 80 degrees. Ours had 7 sharp turns in 77 junctions. Dropping the LONGER segment of each sharp turn removed only wrong lines (at 60 degrees: 4 segments, 0 right; at 75: 6, 0 right), whereas dropping the shorter removed right ones.
+Built: `removeHairpins` (src/lib/geometry.ts), setting "Don't let lines double back sharper than N degrees" under Recognised codes (`minTurn` in the dictionary, default 60, 0 = off; mayCross lines are exempt). It runs before crossing removal.
+Sample: drawn 108 -> 103, correct 74 -> 74, precision 69% -> 72%, found unchanged. Seen in the overlay: the long teal ditch-centreline diagonal across the NW corner and the overlapping spike at the east end of the north ditch are gone.
+Not a hairpin and still visible: some long ditch-top (TOP) joins that cross between the two banks. A shorter global "longest join" no longer helps once this rule is on (50-60 ft: no change, 40 ft loses 1 correct), so the default stays 100.
+Caveat: one job; 60 is conservative because real corners (a non-square lot corner, a switchback) can legitimately be sharp. Mild-angle corners (60-80) are not touched.
+
+## Which layer a line belongs on: road vs driveway, and the same segment on two layers (2026-11-05)
+User idea: prioritise layers (limiters like ditches first, then sidewalks) now that lines may not cross. Tested: after the double-back rule only 2 crossings remain (ditch top vs ditch centreline), and four different priority orders all resolve them identically
+(they drop the same 2 wrong lines), so priority has nothing left to decide for crossings. It does decide two LAYER questions, which do not change precision/found (those score the line, not its layer) but matter in CAD:
+- **Same segment drawn on two layers** (a point coded CONC/FOC/EP is sidewalk and road edge at once): 4 segments, the drafter put 3 of them on the SIDEWALK layer (the 4th on neither), i.e. the opposite of "limiters first". Code field `priority`
+  (higher wins; equal keeps both): starter gives CONC and NEW CONC priority 1. Small evidence (3 of 4): a tie-break, not a principle.
+- **Road edge vs driveway edge** (`spurLayer`/`spurAngle` on EP, FOC, BOC, GUTTER, starter spur layer V-DRIV-ASPH, 35 degrees): 7 of the 9 shared segments on the wrong layer were EP shots we put on the road layer that the drafter puts on the driveway layer. The drafter's road lines run
+  ALONG the highway, its driveway lines run ACROSS it (into the lot). The highway direction must come from all the road-family points (principal axis of the point cloud: about 680 ft of shots along the road vs 75 ft across the drive), NOT from our own lines, which the driveway
+  shots dominate (estimating from our lines gave an E-W "highway", which is the driveway). Segments more than 35 degrees off that axis move to the spur layer; closed lines are never re-split; no change when the points have no clear long axis (elongation under 2).
+- Result on the sample: segments on the wrong layer 9 -> 2 (the 2 left are the drafter reusing DECK and DITCH layers for concrete), drawn on two layers 4 -> 0, drawn/correct/precision/found unchanged at 103 / 74 / 72% / 70%. Seen in the overlay: along the highway the road edge is one line,
+  the two driveway edges are on the driveway layer and follow the drafter's dashed driveway lines.
+- **Interaction found while doing it:** removing the duplicates un-protected the curb-return zig-zag at points 173-178 from the double-back rule (a junction of 4 stacked segments is ignored by it; of 2 is judged), which then removed 2 correct lines. The zig-zag involves 1 ft
+  segments, whose direction is survey noise (about 0.1 ft either way swings it by several degrees), so the double-back rule now only judges a turn when both segments are at least 2 ft long. Settings columns "Spur layer" and "Priority".
+
+## Sidewalk concrete: the biggest source of wrong lines (2026-11-05)
+Of the 40 sidewalk (V-SWLK-CONC) segments we drew, 25 were right and 15 wrong; all 40 joined consecutive shots, so the wrong ones were not order mistakes. They fell into groups:
+- **Distance-to-structure notes (5 of the 15):** `CONC 2'OFF BLDG` (137, 144, 165, 166) and `BOC 1.5'OFF HSE` are concrete shots annotated with a distance to the building, not points on a concrete edge; the drafter joined none of them. We skipped `3'O/S` offsets but did not recognise the
+  `N'OFF` spelling. Now: such a shot keeps its code and layer but is never joined into linework (`OFF_NOTE_RE` in codes.ts). Precision 72% -> 76%, no correct line lost.
+- **Short skewed stubs (4 more):** on layers of man-made codes (the existing "Square" flag), a segment of 2-10 ft more than 12 degrees off the site's axis is a cluster of nearby shots, not a wall (`removeSkewedStubs`, layerrules.ts). On the sample every skewed sidewalk segment of 2 ft or more was wrong and
+  every right skewed one was under 2 ft (survey noise); the result is flat for 8-20 degrees (precision 77-80%), so it is not a knife-edge fit. Long diagonals (a real angled path, over 10 ft), closed shapes and layers without the flag are untouched; with too few man-made lines to know the site
+  direction nothing is dropped. Precision 76% -> 79%, no correct line lost.
+- Together: drawn 103 -> 94, correct 74 -> 74, **precision 72% -> 79%**, found unchanged at 70% (checked in the app's Compare panel: 94 drawn, 74 shared). Seen in the overlay: the concrete is long square runs along the drafter's dashed edges and the diagonal zig-zags between the house and patio are gone.
+- Left over (6 wrong): two tiny near-duplicate shots (159-160 1.3 ft, 160-161 0.5 ft), a 7.3 ft and a 2.1 ft square segment in the 146-151 cluster, and two long joins at the driveway mouth (172-173 16 ft, 173-174 42 ft; longer than any right sidewalk segment). Missed (9): zero-length
+  "segments" (the same point twice), two offset pairs, and four short links at the driveway mouth.
+- Caveat: one job. The skewed-stub limits (2-10 ft, 12 degrees) are principled (noise floor, rotated-building allowance) but a surveyor with many short angled walls (a curved sidewalk drawn from closely spaced shots) should untick "Square" for that code.
+
+## Ditch top: banks from the centreline points (2026-11-06)
+
+The `TOP` bank lines are offset from the `CLD` centreline. The centreline used to be the shot-order chain, so a mis-ordered or broken centreline gave bad banks.
+It is now rebuilt from the `CLD` points themselves (`pointSpines`: group nearby points, take the long axis, walk nearest-neighbour from one end), falling back to the shot-order chain if there are no usable points.
+Sample job: TOP 25 of 25 drawn segments are in the drafter's drawing (was 17 of 21), correct 74 -> 82, precision 79% -> 84%, found 70% -> 77%. It also helps with out-of-order numbers (20% swapped 56% -> 65%; fully scrambled shot-order 11% -> 25%; position mode unchanged at 48%).
+Follow-up the same day: the centreline (CLD) line itself is now also drawn in position order (`pointSpines` with a tight link of 3x the median nearest-neighbour spacing, so separate runs are not joined). In shot order the crew zig-zagged (243, 245, 246, 249) and the sharp-turn rule deleted 240-243 and 246-249; 213-222 and 240-246 are now drawn (+2 correct). 222 to 235 is 88 ft apart and the drafter leaves it open too. Applies only when a code has `alongside` banks. 207 tests.
+Still missing: 2 TOP segments and about 6 sidewalk stragglers; wrong: 219-213 (side shot) and 243-249 (shots 2 ft apart). Checked visually in the UI; the browser suites are deferred at the user's request.
+
+### Road and driveway edge leftovers (tried 2026-11-06, no gain)
+
+Wrong or missed on these layers: the road kerb line 104-261-182-181-106 is shot in separate runs (the driveway-mouth corners 181, 182, 261 were shot much later than 104 and 106), so shot order breaks it; the same corners are then chained into the driveway edge (181-180, 182-183, 261-260), which the drafter did not draw; the driveway apron 180-183 is missed.
+Tried a per-code `fillGaps` (join leftover points of the road layer by position, 20 to 75 ft). Gap fill on the road layer alone added the right joins in an earlier test, but in the full pipeline the total stayed at 82 correct with 2 to 3 extra wrong lines (e.g. 191-200, 186-298), so it was backed out. Then tried the corner rule: where a road-aligned run meets a driveway run at a shot carrying two codes of the same line group (EP/BOC), the corner stays on the road edge and the driveway edge starts at the next shot (`cornerPoints` in layerrules.ts). Dropped 2 wrong driveway lines (181-180, 182-183), nothing correct lost: precision 84% -> 85%, found unchanged (82 of 106). Limited on purpose: ending every spur at any multi-code point also removed 6 correct driveway segments (FOC/EP shots), so it only applies at a junction with a road-aligned run. Not fixed: the road kerb line is still split (104-261, 261-182, 181-106 missed) and 261-260 is still wrong. 206 tests.
+
+## Repairing order with direction and position (2026-11-06)
+
+Idea from the user: do not trust shot order blindly; fix it with where points are and which way lines head. Built as a repair on top of shot order (renumbering would throw away the one reliable signal, the order the crew walked):
+1. **Zig-zags** (`repairZigzags` in geometry.ts, run before the sharp-turn rule): reverse a stretch inside an open line when that removes sharp turns, shortens the line and does not make it cross itself; the line's two ends stay put. On the sample it changes one TOP line (+1 correct).
+2. **Continuing line ends** (`continue.ts`, after the spur split): join the end of a line to the end of another line, or to a loose point, of the same road family when each lies ahead of the other within 25 degrees of its heading, within 80 ft (up to 150 ft when both lines point within 10 degrees straight at each other: that joins the kerb 107-111 at 133 ft but not the ditch centreline 222-235 at 88 ft, which the drafter left open), never skipping a point, never crossing, never touching a BEG/CLO point. An END marker stops the shot-order line but this step may still bridge it when the next piece lines up: on the sample both END points (178, 185) are drawn straight through by the drafter, +2 correct (178-179, 185-186). That does override an explicit END when the next piece is dead ahead; two points are too few to be sure it is the crew's habit. Repeats up to 4 passes so a joined line can continue again. Two loose points are never joined here (that is gap filling). A second kind of join, the **cap**, ties the free ends of two lines that run side by side and stop at the same place (the two edges of a driveway ending at the apron): the ends must be parallel and facing the same way (within 20 degrees), 8 to 40 ft apart, with the cap square to both; it is tried only for ends no continuation took, and never closes a loop. On the sample it adds the apron 180-183 (+1) and 297-173 (+1) with no new wrong line; without the 8 ft minimum it also tied two sidewalk twins 5.7 ft apart (191-200, wrong).
+3. Two spur rules that free the mouth corners for step 2: a lone spur segment under 3 ft (face of curb to gutter) is dropped, and so is a lone spur segment leaving a multi-code corner. Together with the corner rule above, the kerb line 104-261-182-181-106 is now one line.
+Sample job (property pins ticked by Suggest): 106 drawn, 92 in the drafter's drawing, found 87% of 106, precision 87%, 0 crossings. Without the pins: 102 drawn, 88 right (83% found). Still missing on road/driveway: the apron 180-183 (a side step, not a continuation), 185-186, 179-178, 297-173. Sidewalk leftovers were analysed and left (twin shots 1 ft apart where the drafter used the other twin, a 3-point twin pile, an irregular pad, zero-length segments the drafter has that nothing can draw: the real ceiling is 103 of 106).
+One job only: the 80 ft / 25 degree / 3 ft limits are tuned on this sample and should be checked on a second job.
+
+## Review mode and the review log (built 2026-11-06)
+
+Why: the drawing can only be as good as the crew's data and the drafter's habits (one job, one crew, one drafter so far), so the program should produce a first draft with its doubts marked, and learn from what the drafter changes. A model is the long-term idea (score "should these two points join?" from geometric facts, trained leave-one-job-out across drafters) but needs 10 to 20 jobs from several drafters; with one job it could only memorise. So this step collects the labels honestly instead.
+- **Review** button in the top bar. Guessed segments (made by the continuation, cap or zig-zag-reorder steps; found by building the rules-only drawing again with `guess: false` and `repair: false` and diffing) are drawn dashed amber. Click a line: Keep or Remove; **Add a line**: click two points (layer chosen or worked out from the points' codes). Undo, Clear review. Edits are applied to the drawing and the DXF (`applyEdits`; added lines are `key: 'drafter'`, `mayCross`).
+- **Log**: every keep / remove / add / undo with point numbers, layer and source (rule, guess or manual), kept in browser storage per points file (fingerprint of numbers, positions and descriptions), so a reload restores it. **Export log** saves JSON: all points with codes, positions relative to the job's centre, the generated segments with their source, the final segments, and the events. No file name, client name or address.
+- **Consent and privacy:** nothing is sent anywhere; the log stays on the computer until the drafter exports it. Silent upload was ruled out (real client data, trust, likely contract problem). A later opt-in upload would need a backend, a clear one-time opt-in off by default, and the same stripping.
+- **Label quality:** a drafter only fixes what they notice, so unreviewed lines are not approvals; only Keep is an explicit approval. Training on this needs the leave-one-job-out check before anything is believed.
+- On the sample: 10 guessed segments to check; the guesses include the kerb joins that match the drafter and one wrong ditch-top line (221-216), which is what the review is for.
+Next: a reader that turns a finished DXF from another drafter into the same kind of log (layer-name mapping, LINE vs polyline, blocks; DWG needs converting to DXF first), and per-firm settings for the habits (END as hard stop or hint, join distances).
+
+## No dictionary: built-in rules (2026-11-06)
+
+**Why:** the surveyor sent five more jobs (client data, kept locally and not in the repo). The starter dictionary recognised only 6-12% of their points and drew **0%** of the drafter's lines on four of the five jobs: a code dictionary is crew-specific (these are rural boundary surveys with plain-English descriptions: `CL Job B RD`, `TREE LINE`, `OLD FENCE`), while the drafter's lines are mostly between points with identical descriptions (84 of 91 segments on Job B, 36 of 39 Job C, 24 of 35 Job D). Job F has 6 points and no point-to-point lines, so it is untestable. Decision (user, 2026-11-06): remove the dictionary, decide from conditions now, leave a hook for AI later.
+**What was built (`src/lib/rules.ts`):** `deriveRules(points, overrides?)` keeps the starter codes as built-in knowledge and classifies every other description: words that are never lines (stake, post, flagging, nail, rebar, monument, corner, STK, COR) stay points; `FENCE`/`FEN` any wording is one fence line; `CL <road suffix>` road centreline (a road suffix beats a stream word, so `CL Job C RD` is a road), `CL <creek/branch/spring...>` stream centreline, a driveway centreline stays a point (0 of 17 drawn right); `TREE LINE`, `EDGE OF FIELD`, `WOODS` one tree line; field paths and old roads; `PP`/`OHPL` power; `HC`/`BC`/`BLDG` closed building outline; `SS ... MH` sewer; any other description used twice or more is its own line (layer `V-LINE-<name>`); a one-off or a 1-2 character marker stays a point. These lines get `maxGap 400, maxSkip 8` (fences and tree lines have shots far apart with others between). `overrides` (description -> def or null) is where an AI classifier plugs in; `classifier.ts` is the older sketch of the same seam.
+**Results (point-to-point segments, no property pins):** Job B 78 right of 134 drawn (86% found, 58% precise), Job C 29 of 50 (74% found, 58% precise), Job D 26 of 49 (74% found, 53% precise), Job E 4 of 13 (24% found), Job A unchanged at 93 of 107 (90% found, 87% precise). A plain "any repeated description is a line" fallback with no keyword rules gave 84/72/71/29% found but lower precision, and cost Job A 11 points of precision (87% to 76%) until short markers (`X`, `EG`) and stakes were excluded.
+**Do the Job A rules hold elsewhere?** Mostly neutral: switching off the continuation/cap step, zig-zag repair, sharp-turn rule or crossing removal changes the new jobs by 0-2 segments; the join-ends step helps Job B by +2. What matters is which descriptions become lines.
+**What is still wrong:** the precision. The drafter ignores one-offs and sections outside the parcel (Job B points 173-196, 23 wrong centreline segments, is a stretch the drafter did not draw), draws fences across many wordings (handled by the FENCE rule), and joins property pins of different descriptions (Job E: 8 of 10 property segments), which only the pin picker can do.
+**Property line suggestion no longer auto-ticks:** "pins with the most common cap number" picked the neighbour's pins on Job B (cap #1444 is the adjoiner, a 45-acre polygon) and was wrong on Job C, with nothing to suggest on the other two; only Job A was right (+4). A wrong boundary is worse than none, so pins are ticked by the surveyor (the Suggest button stays, with a warning). This reverses the 2026-11-06 auto-tick.
+Removed with the dictionary: `useCodeBook`, `SettingsDialog` and `settings/*`, `CodesPanels`, `SyncBanner`, `LayerInput`, `bookStorage`, `merge`, dictionary import/export (`parseCodeBookText`, `serializeCodeBook`), `countCodes`, the dictionary file slot and the gear button; the browser's saved-dictionary key is simply no longer read. Kept: `codebook.ts` `parseCodeBook` (validates the built-in starter), `syntax.ts` (the explicit-lines engine and its presets, now only reachable from tests), the layers list and the filter.
+
+## Property lines from deeds and plats: feasibility test on two jobs (2026-11-06)
+
+Question: can scanned deeds and plats (read by AI) give the property lines, so they stop depending on picking pins? Method: read the calls by eye from the scans (standing in for the AI), compute the outline with ordinary code, check it, fit it to the iron pins found in the field, and compare with the drafter's `V-PROP`/`V-ESMT` linework in the finished DXF. Scripts are scratch only (the jobs are client data and not in the repo).
+- **Reading the scans:** pdfjs rendered the scanned PDFs blank until the JBIG2/JPX decoders were enabled (`wasmUrl: .../pdfjs-dist/wasm/`, plus `standardFontDataUrl`, `cMapUrl`, `iccUrl`); with that every PDF in the job folders renders. A typed deed with a text layer extracts directly but carries OCR errors (`mln`, `Clvll`).
+- **Job C (clean case, recorded CAD plat with a line table):** the deed has no calls, only "Lot 1 of the ... subdivision, Plat Book 6 page 130", so a deed reader must follow the reference to the plat. The 7 courses of Lot 1 closed to 0.015 ft over 845 ft (1:56,000) and gave 45,588 sq ft against the plat's printed 45,589.0: an independent check that every call was read right. The plat is on the same grid as the field file (no rotation); with the shape anchored on one pin, 3 corners landed within 0.1 ft of found pins (0.00, 0.05, 0.09 ft). Against the drafter: 6 of 7 corners within 0.03 ft of a vertex they drew (the 7th 2.5 ft), 89% of the outline within 0.5 ft of their property/easement linework and 100% within 3 ft.
+- **Job E (harder: 1960s typed deeds, old bearings, deeds that disagree):** two deeds, a 1.26 ac tract and a 3.26 ac tract south of it. The 3.26 ac deed closed to 1:911 (sides of 710 and 712 ft disagree by 2 ft) and needed the deed bearings turned 2.14 degrees to match the grid (found by searching rotation against the pins; the check that the 710-ft east line equals the distance between two found pins, 710.0 ft, confirms it). With that fit, 3 of 4 corners land on found monuments (0.00, 0.37 and 4.67 ft); the 4th corner has no pin within 58 ft. The 1.26 ac deed closes only to 1:52 (opposite sides 257 and 275 ft): the closure check flags it, and the 275 ft side (which the other deed's point of beginning also states) put its road corners within 1.3 and 5.9 ft of the drafter's vertices. Overall only 35-48% of the computed outline lies within 1 ft of the drafter's property linework: the drafter's lot is a 0.96 ac lot cut from the parent by pins set or found in the field (three found pins, no cap number), and their west boundary takes in a third tract (a 100 ft strip) that was not placed. So deeds give the parent tract, and field pins give the lot.
+- **What the checks buy:** closure, stated acreage, and pin fit residuals each caught or confirmed something real (the Job E 257/275 conflict and a missing NW pin were flagged; Job C's three corner-to-pin matches confirmed the whole read). A misread digit would show.
+- **Synergy to build:** once an outline is computed, the boundary pins to tick are the ones that lie on it. This fixes the pin-suggestion failure (on Job B the "most common cap" pins were the neighbour's, which would not lie on the subject's outline).
+- **Limits (2 jobs):** I assembled the sides by eye; a pipeline must read each label with its position, try orderings, and keep the one that closes and matches the line table. Job C was an easy, clean plat. Curves, "to the creek", deeds that say "same property as DB x page y", handwriting, and subdivided lots are not tested.
+- **Next:** a pipeline of (1) vision read of the deed/plat into structured calls with confidences, (2) code that assembles, closes and checks, (3) rotation/translation fit to found pins, (4) Review mode showing each call beside its scan crop. Needs the Claude API (a key, and deeds leave the machine: they are public records, unlike the field data).
+
+## Deeds and plats: all 27 files read and checked (2026-11-06)
+
+Method: every page of every deed/plat in the five job folders was rendered (scans need the pdfjs JBIG2/JPX wasm), four agents transcribed the land descriptions into JSON without guessing (`?` for unclear digits), and a checker (scratch) parsed each call, walked the course, and tested closure and the stated acreage. Findings below are measurements on 5 jobs; the extraction JSON stays in scratch (client names).
+**What the files are (27):** 13 deeds with metes-and-bounds calls (one is an 8-parcel package with a single usable description, one a 5-parcel deed), 4 plats, 2 deeds that only reference a plat or another deed, 7 that are not descriptions at all (easements, a scrivener's affidavit, a will, a greenbelt application, a handwritten tax-map deed list, a work-order intake sheet), 1 duplicate. 24 of 25 PDFs are scans with no text layer; `buford adams sub.tif` is really a PDF (sniff the bytes, not the extension).
+**Verification outcome per document (18 that should plot):** 8 close and match their stated acreage; 10 are flagged. Passing: a 1960s-80s style deed set on Job D (25 calls 1:1,237, 180.85 ac stated vs 181.15), a 5-parcel deed (all within 2% of five different stated acreages), a modern 2024 deed (closure exact, 0.91 ac stated vs 0.91 computed), Job C parent tract (1:1,927, 4.66 ac vs 4.66), the Job C recorded plat (1:56,604, area within 1 sq ft), Job E's 3.26 ac deed (1:911) and 100 ft strip, one adjoiner parcel (1:448). Flagged: source does not close (Job E 1.26 ac tract 1:52; Job B 1969 deed 1:43 and +10% area, its 2013 retype the same, and a 1971 deed 1:59 and +16%); source incomplete (an arc with no radius or chord; a call with the distance omitted); and not yet resolved (a plat whose line-table rows could not be assigned: area right but 27 ft misclosure; a plat with illegible frontage; a 1977 deed whose closing arc is 625 ft off; a large subdivision plat the agent did not zoom). The checks caught every one of these.
+**Patterns:**
+1. Document type must be decided first, and the subject picked: only about half of the files describe land. A deed that says "Lot 1 ... Plat Book 6 page 130" has no calls: follow the reference to the plat (Job C worked this way). Knowing which deed is the subject needs the owner/address from the job paperwork (intake sheet, deed list), and the newest deed to the current owner is usually the subject (Job B: a 2013 quitclaim that retypes a 1969 description).
+2. Stated acreage is the best single check (10 of 12 checked tracts within 0-2%); closure alone is weaker (an area can match while a side is misread); both together are strong. The checker must compare against the right stated number (a deed can list total acres, acres inside a road right-of-way, and per-parcel acres).
+3. Chain-of-title copies drift: the 2013 retype differs from the 1969 original by a digit (138 1/2 vs 139 1/2); a 2022 deed repeats a call and drops a distance that the 1977 original has. Comparing versions is a free error check; prefer the earliest original.
+4. Calls vary in form: bearings in words ("South 4 degrees West"), symbols, fractions of degrees ("87 1/4 degrees", "46-7/10 acres"), missing minute marks, "northeast 36 degrees, 30' East", "North 0 deg." (due north), an impossible "South 92 degrees East", dashes ("S - 35° -45' East"). Distances were all in feet in these files (no poles/chains/varas). A tolerant parser plus a "reads as" echo for the surveyor is needed.
+5. Curves: radius+arc only (no chord) in one set; a plot needs the chord, so a closing arc can be checked (arc vs the gap to the point of beginning) but a middle arc cannot be placed exactly.
+6. Natural boundaries: calls "with the branch" end at undefined points ("to a point") and are approximations of a meandering creek. They still closed when the chords were given (Job D, 61 calls at 1:1,641) but cannot be tied to the physical creek; they failed in Job B.
+7. Ties and starts: commencing calls to a "true point of beginning" must be excluded from the boundary; starts are tied to adjoiners' corners, road centres, or prior deeds, so a point of beginning is often not a found monument.
+8. Basis of bearings: modern plats and deeds are on grid (a plat and a State Plane NAD83 deed needed no rotation); 1960s deeds are off (2.14 degrees on Job E), so fit the rotation to pins.
+9. Scan problems: cropped edges, struck-through text, handwritten notes and corrections, stamps, speckle, rotated handwritten sheets, and ambiguous book numbers (166 vs 160, 537 vs 532, 9700 vs 9777); large plats need zoomed reading and their small dimension labels and line/curve tables need row-to-line assignment (the least reliable step).
+10. Job paperwork has errors too (a deed list citing a different page than the file supplied, an address differing by a digit).
+**Design implications:** classify the document; follow references; extract calls with the original text kept and a confidence per value; verify (closure, stated acreage, version comparison, pin fit) and only draw a boundary that passes; show the rest as "needs a person" with the reason; keep the surveyor's Review for each call beside its scan crop.
+
+## Deed calls with conditions instead of AI: tested (2026-11-06)
+
+Question (user): can the deed/plat reading be done conditionally? Method: OCR each scan in Node with tesseract.js (works offline in the browser too; confidence 80-94% on typed pages), then extract the calls with rules only (scratch `rulesparse.mjs`), run the same closure/acreage checks, and compare with the calls read by eye.
+**Rules used:** normalise OCR (`mln`->min, `deg.`, quotes and dashes, stray `! | ~`, `§`->S, a comma before 1-2 digits is a decimal point); a bearing is (N|S) degrees [minutes] [seconds] (E|W) with fractions of degrees (`87 1/4`), a leading `Northeast 36°` read as N, and a garbled direction word accepted by edit distance (`FgEagt` -> East); the distance may follow after up to ~70 characters of words ("along the south margin of the road ... 100 feet"); the boundary starts at the (true) point of beginning, a "commencing" tie is excluded, parenthetical witness calls are dropped, and the description ends at "containing"; an unreadable digit (a handwritten correction read as `%`) is filled from the opposite side of a rectangle (same length, reversed) and flagged as inferred.
+**Results (rules only, no AI):** exact match to the eye-read calls and closure on the 2024 Job D deed (8 of 8, 0.00 ft, 0.91 ac as stated), the Job C 4.66 ac tract (14 of 14, 1:1,927), Job E's typed 1963 deed (8 of 8 from its text layer) and 3.26 ac scan (4 of 4, one digit inferred and flagged, 2 ft misclosure), and two small parcels of the 5-parcel Job D deed (7 of 7 and 4 of 4, closure 0 ft). Partial and flagged: the faded 1977 Job F deed (4 of 4 bearing calls, closing arc has no bearing; same 800 ft gap as the eye-read), the 2014 Job F deed (7 of 8, the arc), the long parcels of the 5-parcel deed (48/61, 22/24, 6/8), the 180 ac Job D deed (16 of 25), a speckled 1969 Job B deed (5 of 11), a cropped 1971 deed (10 of 14), a 2022 deed whose OCR was garbled by stamps and a notary block (1 of 5). Every incomplete read was caught by closure; no silent wrong boundary appeared.
+**Reading:** rules finish about half of the description sets on their own, the clean typed ones; scans with speckle, cropping, stamps over text, long meandering descriptions and plats need more. So tier it: OCR then rules then checks, and send only the flagged pages to an AI vision read (or to the surveyor), which also keeps most documents on the machine.
+
+## Deed reading built into the app (2026-11-06)
+
+What: attach a deed PDF (or image) in the Files panel, press **Read the land description** in the Deed panel. The text comes from the PDF's text layer, or OCR (tesseract.js, in the browser; the page images stay in the tab, the OCR engine downloads its language data from a CDN the first time) when a page has no text. Plain rules (`src/lib/deedcalls.ts`) pull out the calls and split a deed into tracts/parcels. `src/lib/traverse.ts` walks them and gives a verdict: **OK** (closes to 1 in 400 or better and matches the stated acreage within 3%), **Check** (plausible but a bearing was filled in from the opposite side), **Not trusted** (does not close, wrong area, or a bearing is unreadable): nothing is drawn from a not-trusted read. The calls are listed as read, with flags. **Place on the drawing** (`src/lib/deedfit.ts`) fits the outline to the pins and monuments found in the field and draws it as the property line (V-PROP, with bearing/distance labels, replacing the pin-derived line; Remove outline puts the pins back).
+Fit design (learned the hard way on real jobs): the deed gives the shape and the pins give where it is and how it points; search a turn of +-15 degrees and slide a corner onto each pin; score each pin by its distance to the outline, capped at 10 ft so a neighbour's pins cannot pull the fit; reward a pin sitting on a corner (a corner fixes two sides) and add a tie-breaker for the smaller turn; accept only when at least three pins lie within 5 ft of the outline and they are not all on one line (otherwise the shape could slide). Without the corner reward and the cap, Job E's 3.26 ac deed fitted to the wrong lot's pins, and Job C fitted at -9 degrees instead of 0.
+Results in the browser on real jobs: Job C's parent tract (a scan, OCR 24 s): 14 calls, 4.66 ac as stated, 1 in 1,927, placed at -0.04 degrees with 4 pins within 0.3 ft. Job E's 3.26 ac 1963 deed (a scan, 34 s): one handwritten digit inferred and flagged (Check), 1 in 911, placed at 2.13 degrees with three pins on three corners within 0.1 ft (labels S 06 07 48 W 710.00 etc. after the turn). Job E's typed 254-645 deed reads from its text layer in 4 s: its 1.26 ac tract is correctly marked not trusted (it misses closure by 18 ft) and its 100 ft strip is OK but has no pins to place it on.
+Limits: first run downloads the OCR data (needs the network); one description is placed at a time; plats, curves (an arc has no bearing, so the description fails closure) and descriptions that refer to a plat or another deed are not handled; a deed whose subject lot is cut from the described tract (Job C's Lot 1) is placed by its parent tract's pins only. The PDF decoders and fonts are copied from node_modules into `public/pdfjs/` by `scripts/copy-pdfjs-assets.mjs` (run by `predev` and `prebuild`; not committed): without the JBIG2/JPX decoders scanned pages render blank. `pdfjs-dist` and `tesseract.js` are loaded only when a deed is read (separate chunks; the main bundle is unchanged).
+Several deeds at once (2026-11-06): the Deed slot takes any number of deeds and plats (`useDeeds`; the same name and size is not added twice). The Deed panel lists a card per deed: its own read (text layer or OCR), verdict badge (OK / Check / Not trusted / No calls), calls as read, and a Place button; **Read all** reads them one after another (OCR is heavy), and only one outline is placed at a time (placing another replaces it; removing a deed removes its outline). A deed with no bearings and distances is labelled "No calls" (easements, affidavits, a deed that refers to a plat). `src/lib/deedcompare.ts` aligns the calls of two deeds and, when most agree, lists what differs (retyped copies drift: a digit changed, a call dropped), shown on each card as "Same land as ...". Tested in the app: the four Job C documents (1 deed with calls placed, 2 easements and 1 plat-referencing deed correctly "No calls"); the three Job B deeds all correctly "Not trusted". The panel does not yet pick the subject deed for the surveyor.
+Tests: 28 new unit tests on invented descriptions (OCR noise, ties, witness calls, reciprocal repair, tracts, acreage, closure verdicts, fit with rotation, edge pins, collinear pins, unrelated pins); none use client text.
+
+## Squares, position and out-of-order numbers (measured 2026-11-05, one job)
+**"Complete the square from three corner points."** The drafter's whole drawing has only 5 closed four-corner shapes (all rectangles), and just 1 of them has exactly three survey points; buildings are rectilinear outlines with 12-14 vertices, not
+simple squares. Completing a fourth corner from every right-angle corner in our lines (14 of them, mostly sidewalk) found a real fourth corner only 50% of the time. Not built; a user-placed fourth corner (click) would be the safe form of it.
+**"Connect by colour (layer), then by position, because numbers can be out of order."** Tested, with the same reference:
+- Position alone (group by layer, shortest join first, at most two neighbours per point, no crossings) is **order-independent but much weaker when the numbers are fine**: 42% found (vs 70% from shot order); with shot order as a tie-breaker 52%. Shot order carries
+  real information: the crew shoots features in sequence.
+- As a gap-filler on top of the shot-order lines it first looked like +5 correct, but that included joins that ran over intermediate points. With a "never skip over a point of the layer" rule (and respecting END/BEG markers) it adds 5 segments, 2 right and 3 wrong,
+  none on man-made layers: a wash on this job. Built (`src/lib/gapfill.ts`, setting "Fill gaps between nearby points of the same colour", default 0 = off) because it matters when numbers are poor; man-made layers (code flag `rectilinear`, Settings "Square") only join along
+  the site's square directions (axis estimated from our own man-made lines: -8.81 degrees vs the lot's true -8.42).
+- **Scrambling the numbers (same points, codes and truth) shows the real risk.** Found / precision by how many neighbours are swapped: in order 70% / 69%; 20% swapped 56% / 60%; 40% swapped 47% / 53%; completely scrambled **11%** / 41%.
+  Position-only is steady at about 47-48% / 47% whatever the numbering, so the two cross at heavy disorder. A windowed variant (position, but only between points within a few numbers of each other) was worse than either. Relaxed line discipline
+  (maxSkip 1-3) recovers about 3 points under swapping and costs nothing in order, but cannot undo it.
+- **Automatic switch:** `orderliness` (share of connecting points whose nearest same-layer neighbour is within two places of them in the numbering of that layer) is 0.81 in order, 0.78-0.81 with 20-40% swapped, **0.17-0.18 when scrambled**.
+  Below 0.5 the app joins by position instead of shot order and says so ("The point numbers look scrambled (only 16% of points...)"). Recognised codes -> "Find lines by" overrides it (automatic / shot order and codes / position). On a scrambled copy of the sample the
+  app finds 51 of the reference's lines instead of 16 (74 when the numbers are in order). Blind spot: mild swapping looks orderly to this measure; relaxed discipline is the lever there.
+
+## Saved dictionary vs an improved starter (found and fixed 2026-11-05)
+**Symptom:** downloads kept showing old results after the code improved. **Cause:** the dictionary is saved in the browser and a saved copy wins over the built-in starter, so starter changes (new rules, new flags, new codes) never reached
+anyone with a saved copy. It is not a hot-reload problem: the dev server was serving the newest files; hot reload refreshes code, not stored data, and React Fast Refresh keeps an open tab's in-memory state until a full reload.
+Diagnosed by reproducing the file: the "(1)" download was 98 of 99 segments identical to the old configuration (no ditch banks, no connected building codes); the "(2)" download after the fix is 108 of 108 identical to the shipped defaults.
+**Fix (`src/lib/merge.ts`, storage format `terraforge.codebook.v2`):** the browser now saves the dictionary together with the starter it was last in step with. When the starter has changed, a three-way merge brings the new starter in and keeps the user's own edits:
+untouched codes follow the new starter, codes the user changed keep their version (and it is reported if the starter also changed them), codes the user deleted stay deleted, codes the user added are kept, codes the starter added are added, and top-level settings
+follow the starter unless the user changed them. A banner lists what changed. A dictionary saved in the older bare format has no record of its starter, so the user is asked ("Use the new starter" / "Keep mine") instead of guessing.
+Verified in a browser with seeded saved states (old dictionary, kept, merged with user edits, nothing saved).
+
+## Linework syntax per firm
+`src/lib/syntax.ts`: the way a firm writes codes and marks lines is data in the code book (`syntax`, always written in full on export): code separator, descriptor marker, begin/end/close WORDS and one-character PREFIXES, and `explicitLines`.
+Presets: *This job* (`/` separates codes; END/BEG/CLO are hints), *TDOT* (`+FN` start, `FN`, `-FN` end, `*FN` close, `=` starts a descriptor, no separator, explicit), *Begin/End/Close words* (Civil 3D / BLM style: `EP1 B` ... `EP1 E`,
+`CC B, CC, CC, CC C`, explicit). Settings -> Linework syntax picks a preset or edits the fields; clashing combinations are refused. A prefix marker applies to the code it is attached to ("+FN"), words apply to the whole point; a marker needs a
+letter/digit after it (so "-5.0" is not an end marker); a dictionary code beats a marker word of the same spelling; text after the descriptor marker is never read as codes (`XUP=P/T/C`). With `explicitLines` a line exists only from a begin
+marker to its end/close marker, stays open across any number of other shots, several lines can be open at once, gap/discipline limits do not apply, and unmarked shots stay points. Built from the documented conventions and tested with their own
+examples; **not yet tried on a real TDOT/Civil 3D file** (the sample job uses neither): do that first when one is available.
+
+## Standards research (are survey codes standardized?)
+No single universal standard. What exists:
+- **Agency code lists**, each its own: [TDOT Survey Feature Codes, April 2023](https://www.tn.gov/content/dam/tn/tdot/state-engineering-technical-training/documents/ord/Survey_Feature_Codes.pdf) (73 pp; our fetch tool got a 403, the user saved it
+  from a browser; the PDF is NOT in the repo), [WSDOT](https://www.wsdot.com/publications/manuals/fulltext/M3028/Symbology2.pdf), [Georgia DOT](https://www.dot.ga.gov/PartnerSmart/DesignSoftware/OpenRoads/OpenRoads%20Field%20Survey%20Feature%20Codes.pdf),
+  [BLM Arizona AZ-956](https://www.az.blm.gov/surveys/Library/2015%20AZ956%20Std%20Survey%20Codes.docx), ODOT, Iowa NRCS. Software code sets too (Civil 3D, Carlson, Magnet, Trimble).
+- **Layer names:** the US National CAD Standard (AIA CAD Layer Guidelines), discipline designator `V` for survey/mapping. Our layer names and the reference drawing follow it. Many web copies are unofficial; check the official source and its licence
+  before bundling the full list (a forum post says ~250 survey layers).
+- **Survey rules** govern what the plat must contain, not field codes: Tennessee [Standards of Practice, chapter 0820-03](https://www.law.cornell.edu/regulations/tennessee/title-0820/chapter-0820-03) (.05 accuracy categories, .07 property survey content:
+  precision ratio, compliance statement, signature, registration no., .09 land descriptions; amended Feb 2025: verify the current text). ALTA/NSPS is the national voluntary standard (not researched).
+- **TDOT list vs the sample job:** only 1 of the job's 30 distinct codes (EP) appears in the TDOT list (21 of 223 shots); the surveyor's codes (FOC, BOC, TOP, CLD, C-DR, IPF, WV...) are their own. TDOT's list is a highway-design list for
+  MicroStation/OpenRoads (its "IN DTM" column says how each feature feeds a terrain model). So: do not assume any one list; the dictionary must be per firm.
+- **Linework conventions differ and are explicit in the standards (unlike this job, where we infer):** TDOT (pp. 10-12): a code starting with `X` = a symbol (point), otherwise a line; `+CODE` starts a line, `CODE` continues it, `-CODE` ends it, `*CODE`
+  closes a figure; **more than one line may be open at the same time**, a code can be reused once its line has ended; `=` starts a free-text descriptor (`XUP=P/T/C`, `+RD=MAIN ST. (ASP.)`) recorded on one point of a line; vertical features (curb, retaining
+  wall) are coded at the bottom with a breakline along the top; point names look like S101. Civil 3D linework code sets: Begin / Continue / End / Close codes, Begin-Curve / End-Curve codes, numbered figure names (`EP1 B`); BLM AZ-956: `B` begin, `C` close
+  (`CC B, CC, CC, CC C`). Syntax also conflicts between sets: here `/` separates several codes on one point; in TDOT `/` appears inside descriptors and `=` starts them.
+- **Implication:** the syntax is part of the code book (see "Linework syntax per firm"); next, offer to *learn a dictionary from a finished drawing* (txt + dxf pair) so any firm can onboard from its own past jobs.
+
+## Should we train a model (e.g. on AWS)? (discussed 2026-11-05, answer: not yet)
+One labelled job (113 point-to-point segments) is far too little for learning, and the errors left are mostly structural (interleaved joins, computed geometry), which a model cannot invent from the file. Rules we can test and explain are the right
+tool for a product whose output a licensed surveyor signs. Where learning could help later: (1) classifying unknown codes into layers (few-shot with a language model is cheaper than training); (2) a small pairwise "should these two shots be joined?"
+classifier (features: code pair, distance, shot gap, turn angle), trainable locally in seconds. It needs hundreds of (points file, finished DXF) pairs from many surveyors, with consent and anonymisation (real jobs carry owner names, addresses, parcel IDs).
+The step that would create that data is the planned "learn a dictionary from a finished drawing" feature, which labels pairs automatically. Decide after that; AWS is an infrastructure choice that only matters at scale.
+
+## Deed input and data-source research
+**Post-POC deed input (spec sketch).** Idea from surveyor the surveyor: the deed supplies what field labels cannot. Not in the POC. First version is a manual-entry table the surveyor fills in; AI extraction later, always confirmed by the surveyor.
+| Needed from deed | Drawing use |
+|---|---|
+| Point of beginning, ties | Anchor for the property line |
+| Courses: bearing + distance | `V-PROP` polyline and bearing/distance labels (the Boundary section already draws these from ticked pins) |
+| Curves: radius, arc/chord, chord bearing, delta, direction | Arcs on `V-PROP` |
+| Closing call | Closure check |
+| Monuments called (e.g. iron pin, `IPF#1670`) | Compare against found IPF/IPS points; flag disagreements |
+| Stated area, owner, instrument date, deed book/page, parcel ID | Title block; area check (the plat's 36,242 sq ft matched our boundary exactly) |
+| Adjoiners (owner, parcel ID, deed ref) | Labels outside lot lines |
+| Easements (P.U.D.E. etc.) | `V-ESMT` |
+| Setbacks (M.B.S.L., usually from subdivision plat/zoning, not the deed) | `V-PROP-SBCK` |
+| Basis of bearings, datum, source plat | General notes, north arrow |
+Field data still supplies: found monuments, improvements, elevations, utility locations. The surveyor decides which evidence controls; the tool drafts and flags.
+**Deed data source (searched 2026-11-05):** no free public deed API found; deeds are county records. Coffee County, TN Register of Deeds: coffeecountyregisterofdeeds.com, 1341 McArthur St Suite 2, Manchester, (931) 723-5130. Online search is reportedly a paid
+subscription / pay-per-search service (records since 1988; older in person); unverified, from third-party directories. Commercial APIs (ATTOM, Regrid, etc.): could not confirm that any returns deed text or parsed bearings/distances.
+**Parcel geometry (coordinates), searched 2026-11-05.** Parcel boundary polygons are widely available (what onX Hunt shows), unlike deed text:
+- Tennessee Comptroller (Property Assessments) distributes statewide parcel data as Esri shapefile downloads and via TNMap
+  (comptroller.tn.gov parcel data page). Not maintained by the Comptroller: Chester, Davidson, Hamilton, Hickman, Knox,
+  Montgomery, Rutherford, Shelby, Williamson. Coffee is not in that list, so it should be covered (not yet verified).
+- A TNMap parcel REST endpoint was not found; browse tnmap.tn.gov/arcgis/rest/services. Regrid sells statewide TN parcels.
+- RESULT of checking TNMap (2026-11-05): no public parcel REST service. `tnmap.tn.gov/arcgis/rest/services` lists 15 folders
+  with no parcel layer; a guessed `CADASTRAL/TN_PARCELS` path returns "Token Required" (code 499, vs 404 for a made-up
+  name), which hints a secured cadastral service exists but is unconfirmed and not usable without a token. Parcel viewer UI:
+  tnmap.tn.gov/assessment/.
+- Comptroller download terms (from comptroller.tn.gov parcel pages): Esri shapefile per county, obtained by submitting a request
+  form that issues download URLs; refreshed weekly (Mondays); no statewide extracts, no bulk/recurring/automated downloads;
+  includes an Assessment_Data dbf joined on GISLINK (owner, land use, assessment); any company may use it, including
+  commercially (no formal license named, no fee stated). Disclaimer: "approximate and used for tax purposes only and does not
+  legally convey or describe a parcel boundary". Contact GIS.Data@cot.tn.gov.
+  => TerraForge cannot fetch parcels live from the state. Realistic option: a one-time manual county download converted to
+  GeoJSON, or a county assessor's own service. Needs more work; keep out of the POC.
+- Accuracy: onX states ~20 ft typical, counties disclaim up to ~50 ft, users report much worse where corners were never
+  surveyed. Fine as a reference/sanity layer, NOT a substitute for the survey or the deed.
+- Possible POC-adjacent uses: show the county parcel outline behind the points as a sanity check; auto-fill owner/parcel ID/deed
+  book for the title block. Unknown: CORS on the REST service (needed for GitHub Pages), and licensing terms.
+
+## Ideas from the original artifact not built yet
+Closure and legal description (boundary-survey features; corner picking, area and courses are now built, see "Closing the gap"), the "add PROP after a code to connect it to the property boundary" convention, a symbol library, ALTA checklist. A manual
+"click two points to join / break a line" tool on the canvas is a possible next step for cases the rules cannot get right.
+
+## Open items
+- [x] Copy the sample `.txt` into `samples/` (done 2026-11-05)
+- [x] Point count mismatch explained (2026-11-05): the DXF has 3 extra points numbered 1, 2, 3 with description the drafter's initials (not in the `.txt`; likely the drafter's initials/control, confirm). Point 148 (`CONC`) is the one `.txt` point my match missed; it appears to sit on layer `V-SWLK-CONC` instead of `PNTS`, so the drafter moved it. The other 201 match the `.txt` exactly (number, description, coordinates)
+- [x] the drafter's initials = the drafter's initials. The plat title block says "DRAWN BY (the drafters' initials)", so points 1-3 are drafter-added and the generator should not produce them
+- [ ] Get the actual deed. `reference/job-a-plat.pdf` is the finished plat (not a deed); it only cites the deed book (a deed book and page)
+- [x] PRIVACY (decided 2026-11-05): repo is PRIVATE and includes the real client files (`samples/`, `reference/job-a.dxf`, `reference/job-a-plat.pdf`). Anonymise or remove them before ever making the repo public
+- [x] GitHub: owner confirmed as `jackcharlielopez`; private repo created and pushed over HTTPS (2026-11-05). The SSH key on this machine belongs to `Jack-Lopez-JG`. Pages on a private repo needs a paid plan, so the deploy workflow may fail
+- [x] Git init and first commit (done 2026-11-05)
+- [ ] Confirm the code→layer starter table with the surveyor, especially ambiguous codes (`X`, `TOP`/`TOE`, `CONC/EG`)
+- [ ] Decide marker size and text height defaults. The reference uses text height 1.0 and a point size of 4 units
+- [ ] Units: the reference is unitless. Decide whether to expose US survey feet / metres, or just pass through
+- [x] Write the POC plan: see Phases above (Phase 1 first, Claude API with own key for Phase 2, deeds are scanned PDFs)
+- [ ] Get 2-3 more scanned deeds (anonymised if possible) to test Phase 3 extraction
+- [x] Start Phase 1: parser + tests first (done 2026-11-05)
+- [x] TOP/CLD left-right split (ditch banks) built; [ ] driveway vs road edge still open; see the accuracy history
+- [x] A way to render a finished .dxf for comparison (Compare DXF, done 2026-11-05)
+- [ ] Open `out.dxf` from the app in AutoCAD / Civil 3D / BricsCAD and compare to `job-a.dxf`; report anything that looks off
+- [ ] Surveyor review of the starter code table and the default connect settings (the surveyor?)
+- [ ] Decide on symbols: copy the reference's blocks (`SPT4`, `SRVPNO1`, feature blocks like `CG101`) or keep plain circles/text
+- [ ] Commit and push the latest work (the working tree is ahead of the last commit); confirm the GitHub Pages deploy works (a private repo needs a paid plan for Pages)
+- [x] Code dictionary as an importable/exportable data file, with a Settings editor (done 2026-11-05)
+- [ ] Dictionary: merge-on-import option, and per-job vs per-browser storage, if surveyors ask for them
+- [ ] Dictionary review: have the surveyor (or another surveyor) export their own and see what breaks
+
+## Principle: AI proposes, code computes
+AI never writes geometry or the DXF directly. Deterministic, tested code builds the DXF. AI is used only to (1) extract
+deed calls into a table, (2) suggest layers for unknown codes, (3) flag inconsistencies. The surveyor reviews and edits
+every AI output before it affects the drawing. Flow: `.txt` + deed PDF -> parse points -> AI extracts deed calls ->
+surveyor reviews table -> code builds geometry + DXF -> preview -> download.
+
+## Phases (decided 2026-11-05)
+**Phase 1: no AI, no backend.** Parser + tests against the sample file; code dictionary + unknown-code review UI +
+classifier interface; DXF writer (3D points, labels, polylines, layers, linetypes) tested against `job-a.dxf`;
+preview (pan/zoom, layer toggles); deploy (GitHub Pages and/or Docker).
+**Phase 2: Docker backend.** (The disabled "Suggest with AI" button was removed 2026-11-05: the AI approach, e.g. a single "do everything" action, is being rethought. `src/lib/classifier.ts` is an unused interface stub left over from the earlier plan.) Small service holding the Claude API key (read from an env var on the host, never in the repo);
+AI classification of unknown codes.
+**Phase 3: deed.** Upload deed PDF/scan -> AI extraction into a review table -> `V-PROP` + bearing/distance labels,
+closure check, monument comparison against found IPF/IPS. Deeds are expected to be scanned PDFs/images, so extraction
+needs an image-capable model; accuracy will vary and needs more than one test deed. Privacy: deed text/images leave the
+machine to the API, so surveyors must be told; use no real client documents in a public repo.
+
+## Changelog
+- 2026-11-05: Project scaffolded (Vite + React 19 + TS, theme, Pages workflow). Reference DXF analysed. Planning decisions recorded.
+- 2026-11-06: Deed reading in the app: OCR or text layer, rules extract the calls, closure/acreage verdict (OK / Check / Not trusted), outline fitted to found pins and drawn as the property line. Job C and Job E deeds placed to within 0.3 ft of their pins. 260 unit tests.
+- 2026-11-06: All 27 deed/plat files read and checked: 8 of 18 plottable documents close and match their stated acreage, 10 are flagged (source misses closure, incomplete, or not resolved); ten patterns recorded.
+- 2026-11-06: Deed/plat feasibility test on Job C and Job E: plat-derived Lot 1 matches found pins to 0.05-0.09 ft and the drafter's linework (100% within 3 ft); the harder 1960s Job E deeds fit 3 of 4 corners and the closure check flags the conflicting one. Scanned PDFs now render (JBIG2/JPX wasm).
+- 2026-11-06: Dictionary removed from the UI; built-in rules (`rules.ts`) decide from the descriptions, AI hook left as `overrides`. New jobs went from 0% to 24-86% found; Job A unchanged. Auto-ticked property pins reverted (wrong on rural jobs). 232 unit tests.
+- 2026-11-06: Review mode: guessed lines dashed amber, keep/remove/add with undo, edits applied to the DXF, local log with export (relative coordinates, no names). 236 unit tests.
+- 2026-11-06: Caps across the mouth of a U (driveway apron 180-183): +2 correct, no new wrong. Without the property pins: 107 drawn, 93 right (88% found). 222 unit tests.
+- 2026-11-06: END no longer blocks the continuation step (178-179, 185-186 joined, +2 correct, no new wrong). 93 -> 95 of 106 with the suggested pins. 219 unit tests.
+- 2026-11-06: Continuing ends may reach 150 ft when dead ahead (within 10 degrees): kerb 107-111 joined. 219 unit tests.
+- 2026-11-06: Direction-aware repair: zig-zag reorder, continuing line ends, kerb line complete. With the suggested pins: 92 of 106 (87% found, 87% precision), 0 crossings. 218 unit tests.
+- 2026-11-06: Ditch centreline drawn in position order: +2 correct (213-222, 240-246). 207 unit tests.
+- 2026-11-06: Loading a points file now ticks the suggested corner pins, so the property line is drawn straight away (Clear removes it). Sample: 100 drawn, 86 correct, found 81% of 106, precision 86%. The Playwright suites that assumed an empty boundary after load are not re-run yet and may need updating.
+- 2026-11-06: `BASE` is a recognised code (GPS base on pin 100). Suggest no longer ticks a line pin: pin 102 shares cap #1670 but sits 74 ft beyond corner 100 on the extension of the west line, which made the outline 45,300 sq ft; the suggestion is now the 4 corners (100, 123, 209, 250) = 36,242 sq ft, the plat's area. 206 unit tests.
+- 2026-11-06: Driveway mouth corners (EP/BOC) stay on the road edge; the driveway edge starts after them. Precision 84% -> 85%, found unchanged. 206 unit tests. A per-code gap fill for the road layer was tried and backed out (no gain).
+- 2026-11-06: Ditch top: banks follow a centreline rebuilt from the CLD points instead of shot order. TOP 25/25 right, precision 79% -> 84%, found 70% -> 77% (82 of 106). 204 unit tests.
+- 2026-11-05: Sidewalk concrete: shots annotated with a distance to a structure (N'OFF) are no longer joined; short skewed stubs on man-made layers are dropped. Precision 72% -> 79%, found unchanged (74 of 106). 202 unit tests.
+- 2026-11-05: Layer rules: road vs driveway edge split by the road's long axis (spur layer) and a priority tie-break when a segment is on two layers. Wrong-layer segments 9 -> 2, duplicates 4 -> 0, line accuracy unchanged. Double-back rule now ignores turns made with segments under 2 ft (noise). 195 unit tests; browser suites still deferred at the user's request.
+- 2026-11-05: Lines no longer double back: sharp turns (under 60 degrees) drop the longer segment (drafter has 1 in 162 such junctions, ours had 7 in 77; dropped segments were all wrong). Precision 69% -> 72%, found unchanged. Setting `minTurn`. Per the user's request, only unit tests were run for this change (188 pass); the full browser suites are deferred until a good stopping point.
+- 2026-11-05: Fixed saved dictionaries never receiving starter improvements (three-way merge keeping the user's edits, a banner, a choice for old saved copies). Confirmed the (2) download equals the shipped defaults: 74 of 106 point-to-point lines shared, precision 68%.
+- 2026-11-05: Tested 'complete the square' (rare in this job), 'connect by colour then position' and scrambled numbering: shot order collapses to 11% when numbers are scrambled; added orderliness check + automatic switch to position joining, a 'Find lines by' override, opt-in gap filling (never skips over a point) and a Square flag for man-made codes.
+- 2026-11-05: Restored the research and measurement sections of this file (accuracy history, drafter patterns, standards, closing the gap, geometry, syntax, deed/parcel research): they had been lost when the file was restructured, and later edits that anchored on the missing headings silently did nothing. Doc edits now assert their anchors.
+- 2026-11-05: Linework syntax per firm (presets: this job, TDOT, Begin/End/Close words), explicit-lines mode with several lines open at once; connected CRAWL SPACE/STEPS/NEW CONC/AC PAD. Sample: found 70% (74% with the property pins), precision 69-70%, 0 crossings. Explained why points touch no line / lines touch no point. Recorded the AWS-model discussion.
+- 2026-11-05: Standards research (agency code lists, NCS layers, Tennessee 0820-03, TDOT linework rules; only 1 of the job's 30 codes is in the TDOT list). Conclusion: dictionary and linework syntax must be per firm.
+- 2026-11-05: From the overlay review: fixed UTF-8 decoding of the reference (degree signs); ditch banks (TOP beside CLD): found 57% -> 66%, precision 61% -> 68%, 0 crossings; Boundary section (tick corner pins -> closed V-PROP line, area, courses, bearing labels; reproduces the plat's 36,242 sq ft exactly).
+- 2026-11-05: Crossing removal: lines must not cross (all layers; power/pipes/property exempt), on by default. Corrected my earlier crossing metric, which only counted same-layer crossings (real total was 28, not 3). 25 -> 0 non-exempt crossings; recall 61% -> 57%, precision 59% -> 61%.
+- 2026-11-05: Compared the app's latest download with the finished drawing and mined patterns (see "Patterns in the drafter's linework"); found a distance signal (gap 40 beats 100), retracted an apparent EG-terminator pattern.
+- 2026-11-05: Linework made stricter following the artifact's rule (consecutive shots of one kind): line-discipline setting, per-code Skip/Gap, field codes BEG/CLO/END and numbered suffixes (BLDG1/BLDG2 close into polygons), crossing count + warning. Crossings 7 -> 3, precision 55% -> 59%, recall 62% -> 61%.
+- 2026-11-05: Removed the "Suggest with AI" button. Added Compare DXF: load and render any .dxf under our drawing, with Ours/Reference/Both, layer toggles, and point/line comparison stats.
+- 2026-11-05: New layout: upload card over the canvas (multi-file drop: points, dictionary, deed), left panel with accordions that shrinks to an icon strip (profile above gear), profile placeholder + separate gear, colour picker with hex (DXF gets nearest ACI), one shared filter per area.
+- 2026-11-05: Code dictionary is now a JSON data file (`starter-codes.json`) with strict import/export and a Settings editor (bottom-left). Replaced the overrides-on-top model with a single working dictionary (old saved edits are migrated). Fixed a bug where Enter closed the dialog.
+- 2026-11-05: Compared two app downloads with the reference; tuned defaults (CONC on, pole gap 400): found 40% -> 62% of drafter segments. Added Reset-to-defaults button and a reference-score regression test.
+- 2026-11-05: Built Phase 1 (parser, dictionary, linework, R12 DXF writer, preview UI, 30 tests). DXF target changed from R2000 to R12.
+- 2026-11-05: Chose phased plan (Phase 1 no-AI first); AI proposes, code computes; Claude API with own key; deeds are scans.
+- 2026-11-05: Docker/local deployment allowed; optional backend recorded as a later option.
+- 2026-11-05: Added parcel geometry research (TN Comptroller / TNMap).
+- 2026-11-05: Added post-POC deed-input spec and deed API research notes.
+- 2026-11-05: Sample `.txt` copied to `samples/`. Cross-checked against the reference DXF: 201 of 202 points match exactly; mismatch explained (see Open items).
+- 2026-11-05: Git initialised, private repo `jackcharlielopez/terraforge` created, first push done. Client data kept in the private repo.
+- 2026-11-06: Repo made public with a fresh single-commit history. Client files (`samples/`, `reference/*.dxf|pdf`) are gitignored and kept locally; job names here are anonymised (Job A to F). The unredacted notes are in the gitignored `PROJECT.private.md`. Suites that need the real job are skipped when its files are absent.

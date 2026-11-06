@@ -1,0 +1,300 @@
+{
+  "format": "terraforge-codebook",
+  "version": 1,
+  "name": "TerraForge starter (unreviewed)",
+  "maxGap": 100,
+  "layers": [
+    {
+      "name": "V-PROP",
+      "aci": 21,
+      "label": "Property / monuments"
+    },
+    {
+      "name": "V-ROAD-ASPH",
+      "aci": 241,
+      "label": "Road edge / curb"
+    },
+    {
+      "name": "V-ROAD-CNTR",
+      "aci": 1,
+      "label": "Road centerline"
+    },
+    {
+      "name": "V-DRIV-ASPH",
+      "aci": 181,
+      "label": "Driveway, asphalt"
+    },
+    {
+      "name": "V-DRIV-CONC",
+      "aci": 201,
+      "label": "Driveway, concrete"
+    },
+    {
+      "name": "V-SWLK-CONC",
+      "aci": 141,
+      "label": "Concrete / sidewalk"
+    },
+    {
+      "name": "V-DTCH-TOPD",
+      "aci": 6,
+      "label": "Ditch top / toe"
+    },
+    {
+      "name": "V-DTCH-CNTR",
+      "aci": 4,
+      "label": "Ditch centerline"
+    },
+    {
+      "name": "V-BLDG-OTLN",
+      "aci": 170,
+      "label": "Building"
+    },
+    {
+      "name": "V-BLDG-PRCH",
+      "aci": 5,
+      "label": "Porch"
+    },
+    {
+      "name": "V-POWR-OVHD",
+      "aci": 110,
+      "label": "Overhead power"
+    },
+    {
+      "name": "V-WATR-STRC",
+      "aci": 20,
+      "label": "Water structures"
+    },
+    {
+      "name": "V-WATR-PIPE",
+      "aci": 150,
+      "label": "Water line"
+    },
+    {
+      "name": "V-NGAS-UNDR",
+      "aci": 71,
+      "label": "Gas"
+    },
+    {
+      "name": "V-SSWR-STRC",
+      "aci": 180,
+      "label": "Sewer / septic structure"
+    },
+    {
+      "name": "V-NODE",
+      "aci": 1,
+      "label": "Miscellaneous points"
+    }
+  ],
+  "codes": [
+    {
+      "code": "BASE",
+      "label": "GPS base / control point",
+      "layer": "V-NODE",
+      "connect": false
+    },
+    {
+      "code": "IPF",
+      "label": "Iron pin found",
+      "layer": "V-PROP",
+      "connect": false,
+      "boundary": true
+    },
+    {
+      "code": "IPS",
+      "label": "Iron pin set",
+      "layer": "V-PROP",
+      "connect": false,
+      "boundary": true
+    },
+    {
+      "code": "CONC MNT FND",
+      "label": "Concrete monument found",
+      "layer": "V-PROP",
+      "connect": false,
+      "boundary": true
+    },
+    {
+      "code": "PP E-T",
+      "label": "Power pole (electric/telephone)",
+      "layer": "V-POWR-OVHD",
+      "connect": true,
+      "maxGap": 400,
+      "maxSkip": 1000,
+      "mayCross": true
+    },
+    {
+      "code": "EP",
+      "label": "Edge of pavement",
+      "layer": "V-ROAD-ASPH",
+      "connect": true,
+      "line": "road-edge",
+      "rectilinear": true,
+      "spurLayer": "V-DRIV-ASPH",
+      "spurAngle": 35
+    },
+    {
+      "code": "FOC",
+      "label": "Face of curb",
+      "layer": "V-ROAD-ASPH",
+      "connect": true,
+      "line": "road-edge",
+      "rectilinear": true,
+      "spurLayer": "V-DRIV-ASPH",
+      "spurAngle": 35
+    },
+    {
+      "code": "BOC",
+      "label": "Back of curb",
+      "layer": "V-ROAD-ASPH",
+      "connect": true,
+      "line": "road-edge",
+      "rectilinear": true,
+      "spurLayer": "V-DRIV-ASPH",
+      "spurAngle": 35
+    },
+    {
+      "code": "GUTTER",
+      "label": "Gutter",
+      "layer": "V-ROAD-ASPH",
+      "connect": true,
+      "line": "road-edge",
+      "rectilinear": true,
+      "spurLayer": "V-DRIV-ASPH",
+      "spurAngle": 35
+    },
+    {
+      "code": "C/L RD",
+      "label": "Road centerline",
+      "layer": "V-ROAD-CNTR",
+      "connect": true
+    },
+    {
+      "code": "C-DR",
+      "label": "Concrete driveway",
+      "layer": "V-DRIV-CONC",
+      "connect": true,
+      "rectilinear": true
+    },
+    {
+      "code": "TOP",
+      "label": "Top of slope / ditch",
+      "layer": "V-DTCH-TOPD",
+      "connect": true,
+      "maxSkip": 8,
+      "alongside": "CLD"
+    },
+    {
+      "code": "TOE",
+      "label": "Toe of slope",
+      "layer": "V-DTCH-TOPD",
+      "connect": false
+    },
+    {
+      "code": "CLD",
+      "label": "Centerline of ditch",
+      "layer": "V-DTCH-CNTR",
+      "connect": true,
+      "maxSkip": 8
+    },
+    {
+      "code": "CONC",
+      "label": "Concrete",
+      "layer": "V-SWLK-CONC",
+      "connect": true,
+      "rectilinear": true,
+      "priority": 1
+    },
+    {
+      "code": "NEW CONC",
+      "label": "New concrete",
+      "layer": "V-SWLK-CONC",
+      "connect": true,
+      "rectilinear": true,
+      "priority": 1
+    },
+    {
+      "code": "STEPS",
+      "label": "Steps",
+      "layer": "V-BLDG-OTLN",
+      "connect": true,
+      "rectilinear": true
+    },
+    {
+      "code": "AC PAD",
+      "label": "A/C pad",
+      "layer": "V-BLDG-OTLN",
+      "connect": true,
+      "rectilinear": true
+    },
+    {
+      "code": "CRAWL SPACE",
+      "label": "Crawl space",
+      "layer": "V-BLDG-OTLN",
+      "connect": true,
+      "rectilinear": true
+    },
+    {
+      "code": "PORCH",
+      "label": "Porch",
+      "layer": "V-BLDG-PRCH",
+      "connect": false
+    },
+    {
+      "code": "FF",
+      "label": "Finished floor",
+      "layer": "V-BLDG-OTLN",
+      "connect": false
+    },
+    {
+      "code": "BLDG",
+      "label": "Building",
+      "layer": "V-BLDG-OTLN",
+      "connect": true,
+      "closeNumbered": true,
+      "rectilinear": true
+    },
+    {
+      "code": "S-TANK",
+      "label": "Septic tank",
+      "layer": "V-SSWR-STRC",
+      "connect": true,
+      "closed": true
+    },
+    {
+      "code": "WV",
+      "label": "Water valve",
+      "layer": "V-WATR-STRC",
+      "connect": false
+    },
+    {
+      "code": "WM",
+      "label": "Water meter",
+      "layer": "V-WATR-STRC",
+      "connect": false
+    },
+    {
+      "code": "TOP FH",
+      "label": "Fire hydrant",
+      "layer": "V-WATR-STRC",
+      "connect": false
+    },
+    {
+      "code": "WATERLINE",
+      "label": "Water line",
+      "layer": "V-WATR-PIPE",
+      "connect": false,
+      "mayCross": true
+    },
+    {
+      "code": "GAS",
+      "label": "Gas",
+      "layer": "V-NGAS-UNDR",
+      "connect": false,
+      "mayCross": true
+    }
+  ],
+  "maxSkip": 0,
+  "avoidCrossings": true,
+  "fillGaps": 0,
+  "minTurn": 60
+}
