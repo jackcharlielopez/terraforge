@@ -1,4 +1,5 @@
 import { useMemo } from 'react'
+import { pinLinesAlong } from '../lib/pinlines.ts'
 import { buildBoundary, findCandidates, suggestBoundary } from '../lib/boundary.ts'
 import type { Boundary } from '../lib/boundary.ts'
 import {
@@ -74,7 +75,9 @@ export function useSurveyDrawing(
   const autoPins = useMemo(() => (deedBoundaries.some((b) => b.polyline.layer === 'DEED') ? [] : suggestBoundary(candidates)), [candidates, deedBoundaries])
   const boundarySel = pinSelection ?? autoPins
   const boundary = useMemo(() => buildBoundary(points, boundarySel), [points, boundarySel])
-  const allLines = useMemo(() => [...lines, ...(boundary ? [boundary.polyline] : []), ...deedBoundaries.map((b) => b.polyline)], [lines, boundary, deedBoundaries])
+  // The drafter draws the property line pin to pin: along each trusted deed outline, join the found pins that sit on it.
+  const pinLines = useMemo(() => deedBoundaries.filter((b) => b.polyline.layer === 'DEED').flatMap((b) => pinLinesAlong(b.polyline, candidates)), [deedBoundaries, candidates])
+  const allLines = useMemo(() => [...lines, ...pinLines, ...(boundary ? [boundary.polyline] : []), ...deedBoundaries.map((b) => b.polyline)], [lines, pinLines, boundary, deedBoundaries])
   const labels = useMemo(() => [...(boundary?.labels ?? []), ...deedBoundaries.flatMap((b) => b.labels)], [boundary, deedBoundaries])
 
   const layerRows = useMemo(

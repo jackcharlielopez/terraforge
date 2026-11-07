@@ -198,11 +198,12 @@ Idea from the user: do not trust shot order blindly; fix it with where points ar
 1. **Zig-zags** (`repairZigzags` in geometry.ts, run before the sharp-turn rule): reverse a stretch inside an open line when that removes sharp turns, shortens the line and does not make it cross itself; the line's two ends stay put. On the sample it changes one TOP line (+1 correct).
 2. **Continuing line ends** (`continue.ts`, after the spur split): join the end of a line to the end of another line, or to a loose point, of the same road family when each lies ahead of the other within 25 degrees of its heading, within 80 ft (up to 150 ft when both lines point within 10 degrees straight at each other: that joins the kerb 107-111 at 133 ft but not the ditch centreline 222-235 at 88 ft, which the drafter left open), never skipping a point, never crossing, never touching a BEG/CLO point. An END marker stops the shot-order line but this step may still bridge it when the next piece lines up: on the sample both END points (178, 185) are drawn straight through by the drafter, +2 correct (178-179, 185-186). That does override an explicit END when the next piece is dead ahead; two points are too few to be sure it is the crew's habit. Repeats up to 4 passes so a joined line can continue again. Two loose points are never joined here (that is gap filling). A second kind of join, the **cap**, ties the free ends of two lines that run side by side and stop at the same place (the two edges of a driveway ending at the apron): the ends must be parallel and facing the same way (within 20 degrees), 8 to 40 ft apart, with the cap square to both; it is tried only for ends no continuation took, and never closes a loop. On the sample it adds the apron 180-183 (+1) and 297-173 (+1) with no new wrong line; without the 8 ft minimum it also tied two sidewalk twins 5.7 ft apart (191-200, wrong).
 3. **Rectangles** (`rectangles.ts`): when a kind of feature (same layer and line key) has exactly four connecting shots within 150 ft of each other, and they make a rectangle (every corner within 10 degrees of square, opposite sides within 15%), they are drawn as one closed four-sided line round the shape, whatever order they were shot in. Not applied if the points also belong to a longer line, if any has BEG/END/CLO, or if the feature is already that rectangle. Building shots (HC, BC, HSE, ...) no longer share one line key, so a house's HC corners and BC corners are separate features; sharing one tangled Gum Branch's building (wrong edges 78-79, 73-79). Gum Branch 29/50 -> 30/52. Known cost: the drafter closed only HC there and drew just 77-78 for BC, so closing BC adds two edges the drafter left out.
+4. **Pin lines along a deed outline** (`pinlines.ts`, in `useSurveyDrawing`): along each trusted `DEED` outline, found pins within 8 ft of a side are joined pin to pin on `V-PROP`, in order along the side. Only pins on the outline are used, so a neighbour's pins are never joined. Replaces the idea of joining every pin to its nearest pin, which scored 0% on Daugherty-Capley and Gum Branch (the drafter draws no pin-to-pin lines there), 36% on Woodbury and 75% on Kimberly.
 3. Two spur rules that free the mouth corners for step 2: a lone spur segment under 3 ft (face of curb to gutter) is dropped, and so is a lone spur segment leaving a multi-code corner. Together with the corner rule above, the kerb line 104-261-182-181-106 is now one line.
 Sample job (property pins ticked by Suggest): 106 drawn, 92 in the drafter's drawing, found 87% of 106, precision 87%, 0 crossings. Without the pins: 102 drawn, 88 right (83% found). Still missing on road/driveway: the apron 180-183 (a side step, not a continuation), 185-186, 179-178, 297-173. Sidewalk leftovers were analysed and left (twin shots 1 ft apart where the drafter used the other twin, a 3-point twin pile, an irregular pad, zero-length segments the drafter has that nothing can draw: the real ceiling is 103 of 106).
 One job only: the 80 ft / 25 degree / 3 ft limits are tuned on this sample and should be checked on a second job.
 
-## Review mode and the review log (built 2026-11-06)
+## Review mode and the review log (built 2026-11-06; REMOVED from the app later that day, see Part 2)
 
 Why: the drawing can only be as good as the crew's data and the drafter's habits (one job, one crew, one drafter so far), so the program should produce a first draft with its doubts marked, and learn from what the drafter changes. A model is the long-term idea (score "should these two points join?" from geometric facts, trained leave-one-job-out across drafters) but needs 10 to 20 jobs from several drafters; with one job it could only memorise. So this step collects the labels honestly instead.
 - **Review** button in the top bar. Guessed segments (made by the continuation, cap or zig-zag-reorder steps; found by building the rules-only drawing again with `guess: false` and `repair: false` and diffing) are drawn dashed amber. Click a line: Keep or Remove; **Add a line**: click two points (layer chosen or worked out from the points' codes). Undo, Clear review. Edits are applied to the drawing and the DXF (`applyEdits`; added lines are `key: 'drafter'`, `mayCross`).
@@ -416,6 +417,45 @@ closure check, monument comparison against found IPF/IPS. Deeds are expected to 
 needs an image-capable model; accuracy will vary and needs more than one test deed. Privacy: deed text/images leave the
 machine to the API, so surveyors must be told; use no real client documents in a public repo.
 
+# Part 2: the freemium cut and the AI reading experiment (2026-11-06 onward)
+
+Part 1 above is the history of how the drawing rules and the deed reader were built. This part is where the product stands now and what comes next. Job names stay anonymised (this repo is public; the real jobs and their files are local only).
+
+## What the app is now
+- **One flow.** Start screen: add a points file (required) and any deeds or plats, press **Start survey**. Nothing is read before that. A **New survey** button clears everything.
+- **Panels** (all closed except Files, which is open and shows the deed list): Files, Layers, Boundary. Deed outlines are switched on and off in Layers, under "From deeds and plats". The deed dropdown shows only what was read from each file (its calls) and a status icon; a failed read with a one-digit fix keeps its "Use this fix" button.
+- **Removed:** the dictionary and Settings (built-in rules in `rules.ts` instead, with an override hook for AI), and Review mode (the panel, "Review lines", the click overlay, the export log). `lib/review.ts` and its tests are kept, unused, as the base for a later add-and-fix tool.
+- **Compare against a finished .dxf is behind a build flag**, `VITE_FEATURE_COMPARE` (`src/lib/features.ts`). The shipped `.env` sets it to `false`; tests force it on. The code stays in the bundle; the flag only hides it.
+
+## Rules added after Part 1
+- **Rectangles** (`rectangles.ts`): exactly four shots of one feature that make a rectangle (corners within 10 degrees of square, opposite sides within 15%) are drawn as one closed four-sided line in the rectangle's own order. Skipped if the points are part of a longer line, have BEG/END/CLO, or are already drawn that way. Building shots (HC, BC, HSE...) no longer share one line key; sharing it tangled one building into a six-point polygon. Known cost: where a drafter closes only one of two corner sets, closing the other adds two edges they left out.
+- **Pin lines along a deed outline** (`pinlines.ts`): along each trusted outline, found pins within 8 ft of a side are joined pin to pin on `V-PROP`, in order. Tried and rejected: joining every pin to its nearest pin (0% right on two rural jobs where the drafter draws no pin-to-pin lines, 36% and 75% on the other two).
+- Deeds that fail their checks are drawn anyway, dashed on `DEED-CHECK`, and open if they do not close. Trusted outlines are on `DEED`. All outlines and the pin boundary are ticked automatically; the surveyor unticks.
+
+## Where the accuracy stands
+- Linework precision against the drafters' drawings: about 87% on the best job, 53-58% on the rural ones. Share of the drafter's lines found: 24-90%.
+- The gap on the rural jobs is mostly not in the points file: 72-94% of the drafters' linework there is deed or plat geometry. Reading deeds and plats better is the largest lever.
+- Deed reading: of 14 land descriptions, 7 read as trusted, 5 are correctly rejected, 2 are our misses (a 61-call parcel read as 48; an 8-call parcel with the distance written before its bearing). Plats are not usable yet (an OCR test page gave 9 of 13 numbers; table numbers fine, line bearings garbled). Scanned deeds take about 30 s each.
+
+## Next: could a vision model read deeds and plats better? (a test, not yet run)
+Prediction, not data: a big improvement for deeds and plats, almost none for field linework (the rules already reach 87% on the best job, and AI cannot invent geometry that is not in the file).
+
+Offline experiment, no app changes:
+1. Take the deeds and plat pages from the local test jobs (the 14 descriptions, plus the plat pages already OCR-tested). Render each page to an image.
+2. Ask a vision model for the calls as JSON in the shape `deedcalls.ts` produces, so the result goes straight into `traverse.ts` and `assess`.
+3. Score each read by closure, area against stated acreage, and the `assess` verdict, per description, against the current reader. Never accept the model's own confidence. Record cost and time per page, and whether wrong digits are caught by the checks.
+4. Success: more of the 14 trusted, the 2 misses fixed, plat bearings and tables extracted, and no wrong read that passes the checks. Agree these with the user before running.
+
+Constraints and open decisions:
+- **Privacy.** The app promises "read in your browser, nothing is uploaded". Sending client deeds to a model provider breaks that. Get explicit approval for provider and files before sending anything, even offline. For the product it needs an opt-in or paid-tier decision and its own wording.
+- **Cost** per plat page, and who pays.
+- Plats first (largest gap) or the 14 deeds first (clearest scoring)?
+- If positive, it plugs in beside `ocr.ts` and returns the same calls. `traverse.ts`, `repair.ts` and the closure and area checks stay as the safety net. Gate it behind a build flag like compare.
+
+## Housekeeping
+- Stale in Part 1 and `README.md`: the Settings gear, dictionary upload and recognised/unrecognised code panels, and Review mode. Treat Part 2 as current where they disagree.
+- Nothing from this stretch is committed.
+
 ## Changelog
 - 2026-11-05: Project scaffolded (Vite + React 19 + TS, theme, Pages workflow). Reference DXF analysed. Planning decisions recorded.
 - 2026-11-06: Deed reading in the app: OCR or text layer, rules extract the calls, closure/acreage verdict (OK / Check / Not trusted), outline fitted to found pins and drawn as the property line. Job C and Job E deeds placed to within 0.3 ft of their pins. 260 unit tests.
@@ -456,3 +496,4 @@ machine to the API, so surveyors must be told; use no real client documents in a
 - 2026-11-05: Sample `.txt` copied to `samples/`. Cross-checked against the reference DXF: 201 of 202 points match exactly; mismatch explained (see Open items).
 - 2026-11-05: Git initialised, private repo `jackcharlielopez/terraforge` created, first push done. Client data kept in the private repo.
 - 2026-11-06: Repo made public with a fresh single-commit history. Client files (`samples/`, `reference/*.dxf|pdf`) are gitignored and kept locally; job names here are anonymised (Job A to F). The unredacted notes are in the gitignored `PROJECT.private.md`. Suites that need the real job are skipped when its files are absent.
+- 2026-11-06: Part 2 added: freemium cut (compare flag, Review removed, simplified deed list), rectangle rule, pin lines along deed outlines, and the plan for the AI reading experiment.
