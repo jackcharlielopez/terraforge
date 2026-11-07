@@ -1,6 +1,7 @@
 import { fitOutline, tooBigToFit } from './deedfit.ts'
 import type { Anchor, Placement } from './deedfit.ts'
 import { snapToOutlines } from './deedsnap.ts'
+import { partlyOverlaps } from './overlap.ts'
 import type { Vertex } from './traverse.ts'
 
 export interface Item {
@@ -25,9 +26,15 @@ export function placeAll(items: Item[], anchors: Anchor[]): Result[] {
   const done = new Map<string, Result>()
   // only trusted outlines are used to place others: a shape that failed its checks must not pull its neighbours out of position
   const placed: Array<{ key: string; vertices: Vertex[] }> = []
-  for (const it of items) {
+  // Most convincing fits first: more pins on the lines, and more of them at corners. A weaker fit that would lie partly on top of one
+  // already accepted is the wrong one of the two, so it is left for the shared-line step (neighbours have no pins of their own).
+  const fits = items.flatMap((it) => {
     const p = fitOutline(it.corners, anchors)
-    if (!p) continue
+    return p ? [{ it, p, evidence: p.hits.length + p.hits.filter((h) => h.corner !== null).length }] : []
+  })
+  fits.sort((a, b) => Number(b.it.trusted !== false) - Number(a.it.trusted !== false) || b.evidence - a.evidence)
+  for (const { it, p } of fits) {
+    if (placed.some((o) => partlyOverlaps(p.vertices, o.vertices))) continue
     done.set(it.key, { key: it.key, how: 'pins', vertices: p.vertices, rotation: p.rotation, placement: p })
     if (it.trusted !== false) placed.push({ key: it.key, vertices: p.vertices })
   }
@@ -36,7 +43,7 @@ export function placeAll(items: Item[], anchors: Anchor[]): Result[] {
     for (const it of items) {
       if (done.has(it.key)) continue
       const s = snapToOutlines(it.corners, placed.map((p) => p.vertices))
-      if (!s) continue
+      if (!s || placed.some((o) => partlyOverlaps(s.vertices, o.vertices))) continue
       done.set(it.key, { key: it.key, how: 'shared line', vertices: s.vertices, rotation: s.rotation, sharedFeet: s.sharedFeet, withKey: placed[s.to].key })
       if (it.trusted !== false) {
         placed.push({ key: it.key, vertices: s.vertices })

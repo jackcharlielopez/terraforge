@@ -6,6 +6,7 @@ import type { Deed } from '../../hooks/useDeed.ts'
 
 type Reading = ReturnType<typeof useDeedReading>
 
+
 interface Props {
   deeds: Deed[]
   reading: Reading

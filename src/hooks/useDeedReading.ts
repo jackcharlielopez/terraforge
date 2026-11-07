@@ -3,11 +3,12 @@ import { inlineDeedMath, workerDeedMath } from '../lib/deedmath.ts'
 import type { Result } from '../lib/deedplace.ts'
 import type { Anchor } from '../lib/deedfit.ts'
 import { readDescription } from '../lib/deedcalls.ts'
-import type { Call } from '../lib/deedcalls.ts'
+import type { Call, Tract } from '../lib/deedcalls.ts'
 import { compareCalls } from '../lib/deedcompare.ts'
 import type { Comparison } from '../lib/deedcompare.ts'
 import { outline } from '../lib/boundary.ts'
 import type { Boundary } from '../lib/boundary.ts'
+import { processDeeds } from '../lib/airead.ts'
 import { readDeedText } from '../lib/ocr.ts'
 import type { ReadProgress } from '../lib/ocr.ts'
 import { applyRepair } from '../lib/repair.ts'
@@ -98,23 +99,87 @@ export function useDeedReading(deeds: Deed[], anchors: Anchor[]) {
   const patch = (id: string, change: Partial<ReadState>) => setReads((r) => ({ ...r, [id]: { ...(r[id] ?? IDLE), ...change } }))
   const stateOf = (id: string): ReadState => ({ ...(reads[id] ?? IDLE), progress: progress[id] ?? null, selected: chosen[id] ?? reads[id]?.selected ?? 0 })
 
+  /** Check each description (closure, acreage) and, for one that fails, search for one-digit repairs on the background thread. */
+  const toReadTracts = async (found: (Tract & { retried?: boolean })[]): Promise<ReadTract[]> => {
+    const tracts: ReadTract[] = []
+    for (const t of found) {
+      let assessment = assess(t.calls, t.statedAcres)
+      // a description the AI had to read a second time is never trusted on the checks alone: it closes now, but a model that was told what
+      // was wrong could have changed a digit to fit, so the surveyor compares it with the page
+      if (t.retried && assessment.verdict === 'ok') assessment = { ...assessment, verdict: 'check', reasons: ['Re-read by the AI after failing a check: compare with the page'] }
+      tracts.push({ label: t.label, calls: t.calls, statedAcres: t.statedAcres, assessment, repairs: assessment.verdict === 'fail' ? await deedMath.repair(t.calls, t.statedAcres) : [] })
+    }
+    return tracts
+  }
+
+  const [aiBusy, setAiBusy] = useState(false)
+  const aiRunning = useRef(false)
+  /** Deeds whose reads came from the AI: OCR never writes over these. */
+  const aiOwned = useRef(new Set<string>())
+  const aborts = useRef<Record<string, AbortController>>({})
+  /**
+   * "Process with AI": OCR stops (the one in progress is ended and the queue waits), every deed goes out in one request with the points
+   * file as context, and everything comes back in one response. Each result is checked like any other read, and the drawing fills in.
+   */
+  const processAI = async (list: Deed[], points: string) => {
+    aiRunning.current = true
+    setAiBusy(true)
+    // stop OCR: ending each deed's token drops whatever it was about to report, and aborting ends the engine
+    for (const d of list) {
+      tokens.current[d.id] = (tokens.current[d.id] ?? 0) + 1
+      aborts.current[d.id]?.abort()
+      attempted.current.add(d.id)
+      patch(d.id, { status: 'reading', error: '' })
+      setProgress((p) => ({ ...p, [d.id]: null }))
+    }
+    const marks = Object.fromEntries(list.map((d) => [d.id, tokens.current[d.id]]))
+    const current = (id: string) => tokens.current[id] === marks[id] && present.current.has(id)
+    try {
+      const files = await Promise.all(list.map(async (d) => {
+        const blob = await (await fetch(d.url)).blob()
+        return { id: d.id, file: blob, type: d.type || blob.type }
+      }))
+      const results = await processDeeds(files, points)
+      // checking the reads (and the repair search) for every deed together
+      await Promise.all(
+        list.map(async (d) => {
+          const r = results.find((x) => x.id === d.id)
+          if (!current(d.id)) return
+          if (!r || r.error || !r.tracts) return patch(d.id, { status: 'error', error: r?.error ?? 'The AI reader returned nothing for this deed.' })
+          const tracts = await toReadTracts(r.tracts)
+          if (!current(d.id)) return
+          setChosen((c) => {
+            const { [d.id]: _gone, ...rest } = c
+            return rest
+          })
+          aiOwned.current.add(d.id)
+          patch(d.id, { status: 'done', tracts, selected: Math.max(tracts.findIndex((t) => t.assessment.verdict !== 'fail'), 0), info: { method: 'AI', pages: r.pages, characters: 0 } })
+        }),
+      )
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'The AI reader failed.'
+      for (const d of list) if (current(d.id)) patch(d.id, { status: 'error', error: message })
+    } finally {
+      aiRunning.current = false
+      setAiBusy(false)
+      void drain()
+    }
+  }
+
   const read = async (deed: Deed) => {
+    if (aiOwned.current.has(deed.id)) return
     const mine = (tokens.current[deed.id] = (tokens.current[deed.id] ?? 0) + 1)
     const current = () => tokens.current[deed.id] === mine && present.current.has(deed.id)
+    const abort = (aborts.current[deed.id] = new AbortController())
     patch(deed.id, { status: 'reading', error: '' })
     setProgress((p) => ({ ...p, [deed.id]: null }))
     try {
       const blob = await (await fetch(deed.url)).blob()
       const result = await readDeedText(blob, deed.type || blob.type, (p) => {
         if (current()) setProgress((all) => ({ ...all, [deed.id]: p }))
-      })
+      }, abort.signal)
       if (!current()) return
-      const tracts: ReadTract[] = []
-      for (const t of readDescription(result.text)) {
-        const assessment = assess(t.calls, t.statedAcres)
-        // the one-digit repair search can take a moment on a long description: it runs in the background
-        tracts.push({ ...t, assessment, repairs: assessment.verdict === 'fail' ? await deedMath.repair(t.calls, t.statedAcres) : [] })
-      }
+      const tracts = await toReadTracts(readDescription(result.text))
       if (!current()) return
       // start on the best read: one that passes, else the first
       const best = tracts.findIndex((t) => t.assessment.verdict !== 'fail')
@@ -133,10 +198,11 @@ export function useDeedReading(deeds: Deed[], anchors: Anchor[]) {
    * page). A deed is tried once on its own; "Read again" tries it again. Deeds added while this runs are picked up in the same pass.
    */
   const drain = async () => {
-    if (draining.current) return
+    if (draining.current || aiRunning.current) return
     draining.current = true
     try {
       for (;;) {
+        if (aiRunning.current) break
         const next = deedsRef.current.find((d) => !attempted.current.has(d.id) && (readsRef.current[d.id]?.status ?? 'idle') === 'idle')
         if (!next) break
         attempted.current.add(next.id)
@@ -269,6 +335,8 @@ export function useDeedReading(deeds: Deed[], anchors: Anchor[]) {
     overall,
     stateOf,
     read,
+    processAI,
+    aiBusy,
     select: (id: string, tract: number) => setChosen((c) => ({ ...c, [id]: tract })),
     useRepair,
     agreements,
@@ -276,6 +344,7 @@ export function useDeedReading(deeds: Deed[], anchors: Anchor[]) {
     forget: (id: string) => {
       tokens.current[id] = (tokens.current[id] ?? 0) + 1
       attempted.current.delete(id)
+      aiOwned.current.delete(id)
       setReads((r) => {
         const { [id]: _gone, ...rest } = r
         return rest

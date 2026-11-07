@@ -10,7 +10,8 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "test": "vitest run",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "server": "node --env-file-if-exists=.env.local --env-file-if-exists=.env server/index.mjs"
   },
   "dependencies": {
     "dxf-parser": "^1.1.2",

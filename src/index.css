@@ -284,6 +284,8 @@ td.colour { display: flex; align-items: center; gap: 8px; border-top: none; }
 .verdict.none { background: var(--none-bg); color: var(--none-text); }
 
 .slot-sub { list-style: none; margin: -2px 0 6px; padding: 0 0 0 4px; }
+.slot-ai { list-style: none; margin: 4px 0 0; }
+.slot-ai .btn { width: 100%; }
 .deed-dropdown > summary { cursor: pointer; padding: 4px 0; }
 .deed-card > details > summary { cursor: pointer; list-style: none; }
 .deed-card > details > summary::-webkit-details-marker { display: none; }

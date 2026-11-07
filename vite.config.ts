@@ -12,6 +12,8 @@ const NEEDS_JOB_DATA = ['parse', 'dxf', 'boundary', 'dxfview', 'linework.referen
 export default defineConfig({
   base: '/terraforge/',
   plugins: [react()],
+  // The optional AI-reading backend (`npm run server`); only used when VITE_FEATURE_AI_READ is on.
+  server: { proxy: { '/terraforge/api': { target: 'http://127.0.0.1:8787', rewrite: (p) => p.replace('/terraforge', '') } } },
   test: { environment: 'node', env: { VITE_FEATURE_COMPARE: 'true' }, // tests cover the full app; the freemium .env turns compare off
-     include: ['src/**/*.test.ts'], exclude: HAS_JOB_DATA ? [] : NEEDS_JOB_DATA },
+     include: ['src/**/*.test.ts', 'server/**/*.test.ts'], exclude: HAS_JOB_DATA ? [] : NEEDS_JOB_DATA },
 })

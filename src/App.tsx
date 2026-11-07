@@ -37,6 +37,8 @@ export default function App() {
   // What the user has loaded.
   const [fileName, setFileName] = useState<string | null>(null)
   const [parsed, setParsed] = useState<ParseResult | null>(null)
+  /** The points file as text, kept only so Process with AI can send it as context. */
+  const [pointsText, setPointsText] = useState('')
   const [reference, setReference] = useState<Reference | null>(null)
   const [notices, setNotices] = useState<string[]>([])
   /** A file being read, or that could not be read: shown on its slot as a spinner, then an error mark. */
@@ -93,8 +95,10 @@ export default function App() {
     setPointsPending({ name: file.name, state: 'loading' })
     await paint()
     let next: ParseResult
+    let text = ''
     try {
-      next = parsePoints(new TextDecoder('windows-1252').decode(await file.arrayBuffer()))
+      text = new TextDecoder('windows-1252').decode(await file.arrayBuffer())
+      next = parsePoints(text)
     } catch (err) {
       const message = err instanceof Error ? err.message : 'the file could not be read'
       setPointsPending({ name: file.name, state: 'error', message })
@@ -106,6 +110,7 @@ export default function App() {
     }
     setPointsPending(null)
     setParsed(next)
+    setPointsText(text)
     setFileName(file.name)
     setHidden(new Set())
     // The property line's pins are chosen automatically again for a new job; the surveyor unticks what is wrong.
@@ -186,6 +191,12 @@ export default function App() {
     setNotices(notes)
   }
 
+  /** Process with AI: the deeds (page images) and the points file go to the model provider through the local server; what comes back are calls, which are checked and drawn like any other read. */
+  const processWithAI = () => {
+    if (!window.confirm(`Process with AI sends ${deeds.length} deed${deeds.length === 1 ? '' : 's'} (page images) and the points file to a model provider through your local TerraForge server. Nothing else is uploaded. Continue?`)) return
+    void deedReading.processAI(deeds, pointsText)
+  }
+
   const drop = useFileDrop((files) => void handleFiles(files))
 
   /** Clear everything and go back to the start screen. Asks first, since the drawing and the deeds go. */
@@ -195,6 +206,7 @@ export default function App() {
     for (const d of deeds) deedReading.forget(d.id)
     clearDeeds()
     setParsed(null)
+    setPointsText('')
     setFileName(null)
     setReference(null)
     setPointsPending(null)
@@ -260,6 +272,11 @@ export default function App() {
               : { name: null }
         }
         onFiles={(files, force) => void handleFiles(files, force)}
+        aiAction={
+          FEATURES.aiRead && phase !== 'start'
+            ? { disabled: deeds.length === 0 || !hasData, busy: deedReading.aiBusy, title: deeds.length === 0 || !hasData ? 'Needs a points file and at least one deed' : 'Sends the deeds and the points file to a model provider', onClick: processWithAI }
+            : undefined
+        }
         deedList={phase !== 'start' && deeds.length > 0 ? <DeedList deeds={deeds} reading={deedReading} /> : undefined}
         onClearDeeds={() => (phase === 'start' ? setStaged((s) => ({ ...s, deeds: [] })) : clearDeeds())}
         onClearReference={() => {

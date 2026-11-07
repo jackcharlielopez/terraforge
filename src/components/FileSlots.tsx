@@ -23,6 +23,8 @@ interface Props {
   reference: SlotInfo
   /** The attached deeds, shown as a drop-down under the Deed slot. */
   deedList?: ReactNode
+  /** The Process with AI button under the files; absent when the AI feature is off. */
+  aiAction?: { disabled: boolean; busy: boolean; title: string; onClick: () => void }
   /** A slot's own picker forces its kind; dropping on the page classifies by extension. */
   onFiles: (files: File[], force?: Exclude<FileKind, 'unknown'>) => void
   onClearDeeds: () => void
@@ -31,13 +33,13 @@ interface Props {
 
 const SLOTS = [
   { kind: 'points', hint: 'Point, Northing, Easting, Elevation, Description (.txt, .csv)' },
-  { kind: 'deed', hint: 'Deeds and plats (.pdf or image), one or many. Read in your browser; nothing is uploaded' },
+  { kind: 'deed', hint: 'Deeds and plats (.pdf or image), one or many. '+(FEATURES.aiRead ? 'Read in your browser; nothing leaves it unless you click Process with AI' : 'Read in your browser; nothing is uploaded') },
   { kind: 'reference', hint: 'Optional: a finished .dxf to draw alongside and compare against' },
 ] as const
 
 const ICON = { points: '•', deed: '▤', reference: '◫' } as const
 
-export function FileSlots({ points, deed, reference, deedList, onFiles, onClearDeeds, onClearReference }: Props) {
+export function FileSlots({ points, deed, reference, deedList, aiAction, onFiles, onClearDeeds, onClearReference }: Props) {
   const refs = {
     points: useRef<HTMLInputElement>(null),
     deed: useRef<HTMLInputElement>(null),
@@ -93,6 +95,13 @@ export function FileSlots({ points, deed, reference, deedList, onFiles, onClearD
           </Fragment>
         )
       })}
+      {aiAction && (
+        <li className="slot-ai">
+          <button type="button" className="btn btn-amber" disabled={aiAction.disabled || aiAction.busy} title={aiAction.title} onClick={aiAction.onClick}>
+            {aiAction.busy ? 'Processing with AI…' : 'Process with AI'}
+          </button>
+        </li>
+      )}
     </ul>
   )
 }

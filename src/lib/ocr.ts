@@ -22,9 +22,16 @@ const TEXT_LAYER_MIN = 200
 /** Pages are drawn this many times larger than the PDF's 72 dpi before OCR: small type needs the pixels. */
 const OCR_SCALE = 3
 
-export async function readDeedText(file: Blob, type: string, onProgress: (p: ReadProgress) => void): Promise<DeedText> {
+export async function readDeedText(file: Blob, type: string, onProgress: (p: ReadProgress) => void, signal?: AbortSignal): Promise<DeedText> {
   const { createWorker } = await import('tesseract.js')
   const worker = await createWorker('eng')
+  // stopping ends the OCR engine itself, so a page in the middle of recognising stops using the processor at once
+  const stop = () => void worker.terminate().catch(() => {})
+  if (signal?.aborted) {
+    stop()
+    throw new Error('Reading was stopped.')
+  }
+  signal?.addEventListener('abort', stop)
   try {
     if (type.startsWith('image/')) {
       onProgress({ page: 1, pages: 1, stage: 'recognising' })
@@ -62,6 +69,7 @@ export async function readDeedText(file: Blob, type: string, onProgress: (p: Rea
     }
     return { text, method: used.layer && used.ocr ? 'text layer and OCR' : used.layer ? 'text layer' : 'OCR', pages: doc.numPages }
   } finally {
-    await worker.terminate()
+    signal?.removeEventListener('abort', stop)
+    await worker.terminate().catch(() => {})
   }
 }
