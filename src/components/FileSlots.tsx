@@ -1,11 +1,19 @@
-import { useRef } from 'react'
+import { FEATURES } from '../lib/features.ts'
+import { Fragment, useRef } from 'react'
+import type { ReactNode } from 'react'
 import { ACCEPT, KIND_LABEL } from '../lib/files.ts'
+import { StatusIcon } from './StatusIcon.tsx'
+import type { Status } from './StatusIcon.tsx'
 import type { FileKind } from '../lib/files.ts'
 
 export interface SlotInfo {
   /** What is loaded, e.g. a file name; null when empty. */
   name: string | null
   detail?: string
+  /** A longer explanation of the status, shown on hover. */
+  note?: string
+  /** Reading (spinner), done (check), needs a look (warning) or failed (error). Absent when nothing is loaded. */
+  state?: Status
 }
 
 interface Props {
@@ -13,6 +21,8 @@ interface Props {
   /** Deeds attached; `name` is a summary line such as "3 deeds". */
   deed: SlotInfo
   reference: SlotInfo
+  /** The attached deeds, shown as a drop-down under the Deed slot. */
+  deedList?: ReactNode
   /** A slot's own picker forces its kind; dropping on the page classifies by extension. */
   onFiles: (files: File[], force?: Exclude<FileKind, 'unknown'>) => void
   onClearDeeds: () => void
@@ -27,7 +37,7 @@ const SLOTS = [
 
 const ICON = { points: '•', deed: '▤', reference: '◫' } as const
 
-export function FileSlots({ points, deed, reference, onFiles, onClearDeeds, onClearReference }: Props) {
+export function FileSlots({ points, deed, reference, deedList, onFiles, onClearDeeds, onClearReference }: Props) {
   const refs = {
     points: useRef<HTMLInputElement>(null),
     deed: useRef<HTMLInputElement>(null),
@@ -37,11 +47,16 @@ export function FileSlots({ points, deed, reference, onFiles, onClearDeeds, onCl
 
   return (
     <ul className="slots">
-      {SLOTS.map(({ kind, hint }) => {
+      {SLOTS.filter((s) => s.kind !== 'reference' || FEATURES.compare).map(({ kind, hint }) => {
         const slot = info[kind]
         return (
-          <li key={kind} className={'slot' + (slot.name ? ' filled' : '')}>
-            <span className="slot-icon" aria-hidden="true">{slot.name ? '✓' : ICON[kind]}</span>
+          <Fragment key={kind}>
+          <li className={'slot' + (slot.name && (!slot.state || slot.state === 'ok') ? ' filled' : '') + (slot.state ? ' ' + slot.state : '')}>
+            {slot.state ? (
+              <StatusIcon status={slot.state} label={slot.note ?? (slot.detail ? `${KIND_LABEL[kind]}: ${slot.detail}` : undefined)} />
+            ) : (
+              <span className="slot-icon" aria-hidden="true">{slot.name ? '✓' : ICON[kind]}</span>
+            )}
             <div className="slot-text">
               <strong>{KIND_LABEL[kind]}</strong>
               <span className="muted small slot-detail" title={slot.name ?? hint}>
@@ -74,6 +89,8 @@ export function FileSlots({ points, deed, reference, onFiles, onClearDeeds, onCl
               </button>
             )}
           </li>
+          {kind === 'deed' && deedList && <li className="slot-sub">{deedList}</li>}
+          </Fragment>
         )
       })}
     </ul>

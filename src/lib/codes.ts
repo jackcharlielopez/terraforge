@@ -14,7 +14,11 @@ export const POINT_LAYERS: LayerDef[] = [
 ]
 
 /** Layers for drawn annotations (bearings and distances); not tied to any code. */
-export const ANNOTATION_LAYERS: LayerDef[] = [{ name: 'BRGTXT', aci: 7, label: 'Bearings and distances' }]
+export const ANNOTATION_LAYERS: LayerDef[] = [
+  { name: 'BRGTXT', aci: 7, label: 'Bearings and distances' },
+  { name: 'DEED', aci: 4, label: 'Outlines from deeds and plats' },
+  { name: 'DEED-CHECK', aci: 30, label: 'Deed outlines that failed their checks (unverified)' },
+]
 
 export const MISC_LAYER = 'V-NODE'
 

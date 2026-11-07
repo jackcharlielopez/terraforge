@@ -1,4 +1,5 @@
 import { Accordion } from '../Accordion.tsx'
+import { Swatch } from '../Swatch.tsx'
 import { REF_OVERLAY_COLOR } from '../Preview.tsx'
 import type { RefMode } from '../Preview.tsx'
 import { aciToHex } from '../../lib/aci.ts'
@@ -32,7 +33,7 @@ const MODES: { mode: RefMode; label: string }[] = [
 export function ComparePanel({ name, size, shapes, hasData, mode, onMode, stats, hidden, onToggleLayer, hit, onRemove }: Props) {
   const layers = shapes.layers.filter((l) => hit(l.name))
   return (
-    <Accordion title="Compare" defaultOpen badge={<span className="count">{shapes.layers.length} layers</span>}>
+    <Accordion title="Compare" badge={<span className="count">{shapes.layers.length} layers</span>}>
       <p className="deed-name" title={name}>
         {name} <span className="muted">· {formatSize(size)}</span>
       </p>
@@ -49,7 +50,7 @@ export function ComparePanel({ name, size, shapes, hasData, mode, onMode, stats,
       )}
       {mode === 'both' && hasData && (
         <p className="muted small">
-          <i className="swatch" style={{ background: REF_OVERLAY_COLOR }} /> dashed blue = reference, solid = ours.
+          <Swatch color={REF_OVERLAY_COLOR} /> dashed blue = reference, solid = ours.
         </p>
       )}
       {stats && <ComparisonStats stats={stats} />}
@@ -59,7 +60,7 @@ export function ComparePanel({ name, size, shapes, hasData, mode, onMode, stats,
           <li key={l.name}>
             <label>
               <input type="checkbox" checked={!hidden.has(l.name)} onChange={() => onToggleLayer(l.name)} />
-              <i className="swatch" style={{ background: aciToHex(l.aci) }} />
+              <Swatch color={aciToHex(l.aci)} />
               <span className="mono">{l.name}</span>
               <span className="muted">{l.count}</span>
             </label>

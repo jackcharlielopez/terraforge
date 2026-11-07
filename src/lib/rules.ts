@@ -52,7 +52,8 @@ const RULES: Rule[] = [
   { test: /^CL\b.*\b(RD|ROAD|ST|STREET|AVE|AVENUE|LN|LANE|HWY|HIGHWAY|DR|CT|PIKE|WAY|BLVD|PKWY)\b/, layer: 'V-ROAD-CNTR', label: 'Road centerline' },
   { test: /^CL\b.*\b(CREEK|BRANCH|SPRING|STREAM|RIVER|RUN|DITCH|DRAIN)\b/, layer: 'V-STRM-CNTR', label: 'Stream centerline', line: 'STREAM CL' },
   { test: /^CL\b/, layer: 'V-ROAD-CNTR', label: 'Road centerline' },
-  { test: /^(HC|BC|HSE|HOUSE|BLDG|BUILDING|SHED|GARAGE|CARPORT)\b/, layer: 'V-BLDG-OTLN', label: 'Building', line: 'BUILDING', closed: true },
+  // each kind of building shot is its own feature: HC and BC are different things, and chaining them together draws lines between two buildings
+  { test: /^(HC|BC|HSE|HOUSE|BLDG|BUILDING|SHED|GARAGE|CARPORT)\b/, layer: 'V-BLDG-OTLN', label: 'Building', closed: true },
   { test: /^(SS|SAN|SEWER)\b.*\bMH\b|^SS$/, layer: 'V-SSWR-PIPE', label: 'Sewer', line: 'SEWER', mayCross: true },
   { test: /\bTREE ?LINE\b|\bEDGE OF (FIELD|WOODS|TREES|BRUSH)\b|\bWOODS?\b/, layer: 'V-TREE-LINE', label: 'Tree line', line: 'TREE LINE' },
   { test: /\b(FIELD PATH|CART PATH|TRAIL|OLD (CUT )?RD|OLD ROAD)\b/, layer: 'V-ROAD-TRAL', label: 'Path or old road', line: 'PATH' },

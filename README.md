@@ -28,8 +28,17 @@ lines; a numbered `BLDG` closes into a polygon. The linework settings (gap, disc
 ## When point numbers are out of order
 Lines are normally found from shot order and codes, which is far more accurate when the numbering follows the work. TerraForge measures how orderly the numbers are; if they look scrambled it joins points by position instead and tells you.
 
+## Starting a survey
+Add your files on the start screen (use the slots or drop them anywhere): the survey points (`.txt`, `.csv` or `.asc`) are required; deeds, plats and a finished `.dxf` to compare with are optional. Nothing is read yet. **Start survey** is disabled until a points file is added; pressing it reads the points, then the comparison drawing, and starts reading the deeds in the background. Files added after that are read at once.
+
 ## Reading a deed
-Drop one or many deeds and plats (PDF or image) on the canvas, open the **Deeds** panel and press **Read all** (or **Read the land description** on one). The text comes from the PDF itself or from OCR in your browser (the deed is not uploaded; the OCR engine downloads its language data the first time). The calls (bearings and distances) are pulled out by rules and checked: they must close and match the acreage the deed states. A read that does not is marked "Not trusted" and nothing is drawn. **Place on the drawing** fits the outline to the iron pins found in the field and draws it as the property line. For scanned PDFs the decoders in `public/pdfjs/` are copied from `node_modules` by `npm run dev` / `npm run build`.
+Drop one or many deeds and plats (PDF or image) on the canvas, or use the Deed slot in the **Files** panel. They read themselves in the background, one after another, and appear in a drop-down under the Deed slot with their status. The text comes from the PDF itself or from OCR in your browser (the deed is not uploaded; the OCR engine downloads its language data the first time). The calls (bearings and distances) are pulled out by rules and checked: they must close and match the acreage the deed states. A read that does not is marked "Not trusted" and nothing is drawn. **Place on the drawing** fits the outline to the iron pins found in the field and draws it as the property line. For scanned PDFs the decoders in `public/pdfjs/` are copied from `node_modules` by `npm run dev` / `npm run build`.
 
 ## Review mode
-**Review** (top bar) marks the lines that were guessed (dashed amber), lets you keep or remove any line and add missing ones, and keeps a log of your changes on this computer only. **Export log** saves it as a file (positions relative to the job's centre; no file or client name).
+**Review lines** (the button beside Fit on the drawing) marks the lines that were guessed (dashed amber), lets you keep or remove any line and add missing ones, and keeps a log of your changes on this computer only. **Export log** saves it as a file (positions relative to the job's centre; no file or client name).
+
+## Feature flags
+
+Set at build or dev-server start (or in `.env.local`; see `.env.example`):
+
+- `VITE_FEATURE_COMPARE=false` hides comparing against a finished .dxf: no Compare DXF slot, no overlay or match panel, and a dropped .dxf is skipped with a note. On by default.

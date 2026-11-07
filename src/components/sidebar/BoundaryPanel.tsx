@@ -1,5 +1,4 @@
 import { Accordion } from '../Accordion.tsx'
-import { suggestBoundary } from '../../lib/boundary.ts'
 import type { Boundary, Candidate } from '../../lib/boundary.ts'
 
 const SQ_FT_PER_ACRE = 43560
@@ -11,29 +10,28 @@ interface Props {
   boundary: Boundary | null
   /** Panel filter: which candidate pins to list. */
   hit: (...fields: string[]) => boolean
-  /** The property line shown is the outline placed from the deed, not the ticked pins. */
-  fromDeed?: boolean
+  /** The pins were chosen automatically (the surveyor has not touched the ticks). */
+  auto: boolean
+  /** Choose the pins again automatically. */
+  onAuto: () => void
 }
 
 /** Pick the corner pins that make up the property line; shows the resulting area, perimeter and courses. */
-export function BoundaryPanel({ candidates, selected, onSelect, boundary, hit, fromDeed = false }: Props) {
+export function BoundaryPanel({ candidates, selected, onSelect, boundary, hit, auto, onAuto }: Props) {
   return (
-    <Accordion title="Boundary" defaultOpen badge={boundary ? <span className="count">{selected.length} pins</span> : undefined}>
-      {fromDeed && (
-        <p className="lines-note" role="status">
-          The property line shown is the outline placed from the deed. Remove it in the Deed panel to use ticked pins instead.
-        </p>
-      )}
+    <Accordion title="Boundary" badge={boundary ? <span className="count">{selected.length} pins</span> : undefined}>
       {candidates.length === 0 ? (
-        <p className="muted small">No iron pins or monuments found (codes marked as Boundary in Settings, like IPF and IPS), so there is nothing to draw a property line from.</p>
+        <p className="muted small">No iron pins or monuments found (shots like IPF and IPS), so there is nothing to draw a property line from. A deed outline can still be drawn if you add a deed.</p>
       ) : (
         <>
           <p className="muted small">
-            Tick the corner pins of the parcel. Suggest is only a starting guess (the pins with the most common cap number): on some jobs those are the neighbour&apos;s pins, so check the area against the plat or deed.
+            {auto
+              ? 'Ticked for you: the pins with the most common cap number, which on some jobs are the neighbour\'s. Untick any that are wrong and check the area against the plat or deed. When a deed outline is drawn, no pins are ticked, because the outline is the property line.'
+              : 'Tick the corner pins of the parcel, and check the area against the plat or deed.'}
           </p>
           <div className="row tight">
-            <button className="btn btn-outline btn-sm" onClick={() => onSelect(suggestBoundary(candidates))} title="Pins carrying the most common cap number, plus any pins set on this job">
-              Suggest
+            <button className="btn btn-outline btn-sm" disabled={auto} onClick={onAuto} title="Choose the pins again automatically (none when a deed outline is drawn)">
+              Choose for me
             </button>
             <button className="btn btn-outline btn-sm" disabled={selected.length === 0} onClick={() => onSelect([])}>
               Clear

@@ -127,13 +127,14 @@ export function buildBoundary(points: SurveyPoint[], nos: Iterable<string>): Bou
 }
 
 /** A boundary through corners already in order (a computed deed outline), with area, perimeter and bearing/distance labels. */
-export function outline(corners: Array<{ e: number; n: number; z: number; name: string }>): Boundary | null {
+export function outline(corners: Array<{ e: number; n: number; z: number; name: string }>, layer = BOUNDARY_LAYER, key = 'boundary', closed = true): Boundary | null {
   if (corners.length < 3) return null
   let twice = 0
   let perimeter = 0
   const courses: Course[] = []
   const labels: Annotation[] = []
   corners.forEach((p, i) => {
+    if (!closed && i === corners.length - 1) return // an open outline has no closing course
     const q = corners[(i + 1) % corners.length]
     twice += p.e * q.n - q.e * p.n
     const dn = q.n - p.n
@@ -156,7 +157,7 @@ export function outline(corners: Array<{ e: number; n: number; z: number; name: 
   })
 
   return {
-    polyline: { layer: BOUNDARY_LAYER, key: 'boundary', closed: true, mayCross: true, vertices: corners.map((p) => ({ e: p.e, n: p.n, z: p.z })) },
+    polyline: { layer, key, closed, mayCross: true, vertices: corners.map((p) => ({ e: p.e, n: p.n, z: p.z })) },
     labels,
     courses,
     area: Math.abs(twice) / 2,

@@ -12,5 +12,6 @@ const NEEDS_JOB_DATA = ['parse', 'dxf', 'boundary', 'dxfview', 'linework.referen
 export default defineConfig({
   base: '/terraforge/',
   plugins: [react()],
-  test: { environment: 'node', include: ['src/**/*.test.ts'], exclude: HAS_JOB_DATA ? [] : NEEDS_JOB_DATA },
+  test: { environment: 'node', env: { VITE_FEATURE_COMPARE: 'true' }, // tests cover the full app; the freemium .env turns compare off
+     include: ['src/**/*.test.ts'], exclude: HAS_JOB_DATA ? [] : NEEDS_JOB_DATA },
 })

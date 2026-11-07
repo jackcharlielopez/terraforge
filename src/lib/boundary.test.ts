@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import DxfParser from 'dxf-parser'
 import { describe, expect, it } from 'vitest'
-import { BEARING_LAYER, buildBoundary, findCandidates, formatBearing, suggestBoundary } from './boundary.ts'
+import { BEARING_LAYER, buildBoundary, findCandidates, formatBearing, outline, suggestBoundary } from './boundary.ts'
 import { STARTER_CODES, buildDictionary, matchDescription } from './codes.ts'
 import { compareWithReference } from './compare.ts'
 import { buildDxf } from './dxf.ts'
@@ -116,5 +116,26 @@ describe('boundary in the DXF and against the drafter\'s drawing', () => {
     const withBoundary = compareWithReference(points, lines, ref)
     const without = compareWithReference(points, buildLinework(points, matches, dict), ref)
     expect(withBoundary.matchedSegments - without.matchedSegments).toBe(4)
+  })
+})
+
+describe('outline (a deed outline through corners already in order)', () => {
+  const corners = [
+    { e: 0, n: 0, z: 0, name: '1' },
+    { e: 100, n: 0, z: 0, name: '2' },
+    { e: 100, n: -50, z: 0, name: '3' },
+    { e: 0, n: -50, z: 0, name: '4' },
+  ]
+  it('is closed by default, with a course back to the start and the whole area', () => {
+    const b = outline(corners)!
+    expect(b.polyline.closed).toBe(true)
+    expect(b.courses).toHaveLength(4)
+    expect(b.area).toBeCloseTo(5000)
+  })
+  it('can be open, on its own layer, with no closing course: the gap of a deed that does not close shows', () => {
+    const b = outline(corners, 'DEED-CHECK', 'deed-check', false)!
+    expect(b.polyline).toMatchObject({ layer: 'DEED-CHECK', key: 'deed-check', closed: false })
+    expect(b.courses.map((c) => `${c.from}-${c.to}`)).toEqual(['1-2', '2-3', '3-4'])
+    expect(b.labels).toHaveLength(3)
   })
 })

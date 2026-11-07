@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { classifyFile, formatSize, groupFiles, MAX_BYTES } from './files.ts'
+import { classifyFile, EMPTY_STAGED, formatSize, groupFiles, MAX_BYTES, stageFiles } from './files.ts'
 
 describe('classifyFile', () => {
   it('sorts files by extension, case-insensitively', () => {
@@ -57,5 +57,33 @@ describe('groupFiles', () => {
     const { picked, notes } = groupFiles([file('big.txt', MAX_BYTES.points + 1)])
     expect(picked.points).toBeUndefined()
     expect(notes[0]).toMatch(/Skipped "big.txt": over/)
+  })
+})
+
+describe('stageFiles (the start screen: files wait until "Start survey")', () => {
+  it('holds the points file, the comparison drawing and every deed, without reading any of them', () => {
+    const { staged, notes } = stageFiles(EMPTY_STAGED, [file('job.txt'), file('final.dxf'), file('a.pdf'), file('b.pdf')])
+    expect(staged.points?.name).toBe('job.txt')
+    expect(staged.reference?.name).toBe('final.dxf')
+    expect(staged.deeds.map((d) => d.name)).toEqual(['a.pdf', 'b.pdf'])
+    expect(notes).toEqual([])
+  })
+  it('lets a new points file or drawing replace the staged one, and adds deeds to the ones already there', () => {
+    const first = stageFiles(EMPTY_STAGED, [file('old.txt'), file('a.pdf')]).staged
+    const { staged } = stageFiles(first, [file('new.asc'), file('b.pdf')])
+    expect(staged.points?.name).toBe('new.asc')
+    expect(staged.deeds.map((d) => d.name)).toEqual(['a.pdf', 'b.pdf'])
+  })
+  it('does not add the same deed twice, and says so', () => {
+    const first = stageFiles(EMPTY_STAGED, [file('a.pdf')]).staged
+    const { staged, notes } = stageFiles(first, [file('a.pdf'), file('c.pdf')])
+    expect(staged.deeds.map((d) => d.name)).toEqual(['a.pdf', 'c.pdf'])
+    expect(notes.join(' ')).toMatch(/already added/)
+  })
+  it('keeps what was staged when an unknown file is dropped', () => {
+    const first = stageFiles(EMPTY_STAGED, [file('job.txt')]).staged
+    const { staged, notes } = stageFiles(first, [file('notes.docx')])
+    expect(staged.points?.name).toBe('job.txt')
+    expect(notes.join(' ')).toMatch(/Skipped "notes.docx"/)
   })
 })

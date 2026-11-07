@@ -75,6 +75,6 @@ export function assess(calls: Call[], statedAcres: number | null): Assessment {
   }
   if (reasons.length > 0) return { verdict: 'fail', reasons, traverse: t }
   const inferred = calls.filter((c) => c.inferred).length
-  if (inferred > 0) return { verdict: 'check', reasons: [`${inferred} ${inferred === 1 ? 'bearing was' : 'bearings were'} filled in from the opposite side`], traverse: t }
+  if (inferred > 0) return { verdict: 'check', reasons: calls.filter((c) => c.inferred).map((c) => c.inferred as string), traverse: t }
   return { verdict: 'ok', reasons: [], traverse: t }
 }

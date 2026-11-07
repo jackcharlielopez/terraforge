@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { fitOutline } from './deedfit.ts'
+import { fitOutline, tooBigToFit } from './deedfit.ts'
 
 // A 200 x 150 ft lot whose bearings are 2.1 degrees off the grid, sitting at (1000, 2000).
 const shape = [
@@ -62,6 +62,42 @@ describe('placing an outline on found pins', () => {
       { no: 'd', e: 800, n: 300 },
     ]
     expect(fitOutline(shape, anchors)).toBeNull()
+  })
+  it('gives up, rather than freeze the page, on a huge outline with many pins', () => {
+    const big = Array.from({ length: 70 }, (_, i) => ({ e: 500 * Math.cos((i / 70) * 6.283), n: 500 * Math.sin((i / 70) * 6.283) }))
+    const pins = Array.from({ length: 25 }, (_, i) => ({ no: `p${i}`, e: i * 40, n: i * 25 }))
+    expect(tooBigToFit(big.slice(0, 60), pins)).toBe(true)
+    expect(tooBigToFit(shape, pins)).toBe(false)
+    expect(fitOutline(big.slice(0, 60), pins)).toBeNull()
+  })
+  // A 200 x 711 ft lot (sides as a deed gives them), and helpers to turn it
+  const lot = [
+    { e: 0, n: 0 },
+    { e: -13.95, n: -709.18 },
+    { e: -213.34, n: -697.03 },
+    { e: -199.4, n: 12.15 },
+  ]
+  const turnBy = (v: typeof lot, deg: number, about: { e: number; n: number }) => {
+    const c = Math.cos((deg * Math.PI) / 180)
+    const s = Math.sin((deg * Math.PI) / 180)
+    return v.map((p) => ({ e: about.e + (p.e - about.e) * c + (p.n - about.n) * s, n: about.n - (p.e - about.e) * s + (p.n - about.n) * c }))
+  }
+  it('finds a turn that falls between the search steps: three pins on corners of a long lot fix it to a few hundredths of a degree', () => {
+    for (const turned of [2.13, 2.37, 0.88, -3.61]) {
+      const truth = turnBy(lot, turned, { e: 0, n: 0 }).map((p) => ({ e: p.e + 5000, n: p.n + 5000 }))
+      const p = fitOutline(lot, truth.slice(0, 3).map((v, i) => ({ no: `p${i}`, e: v.e, n: v.n })))!
+      expect(p.rotation, `turn ${turned}`).toBeCloseTo(turned, 1)
+      expect(p.hits.filter((h) => h.corner !== null), `turn ${turned}`).toHaveLength(3)
+    }
+  })
+  it('prefers the arrangement that puts more pins on the outline when two nearly fit', () => {
+    // a second arrangement, turned 1.4 degrees more about the south-east pin, has pins at its own corners too
+    const truth = turnBy(lot, 2.13, { e: 0, n: 0 }).map((p) => ({ e: p.e + 5000, n: p.n + 5000 }))
+    const alt = turnBy(truth, 1.4, truth[1])
+    const both = [truth[0], truth[1], truth[2], alt[0], alt[2]].map((p, i) => ({ no: `p${i}`, e: p.e, n: p.n }))
+    expect(fitOutline(lot, both)!.rotation).toBeGreaterThan(3)
+    // with only the true pins, the true arrangement is found
+    expect(fitOutline(lot, both.slice(0, 3))!.rotation).toBeCloseTo(2.13, 1)
   })
   it('returns nothing for too few corners or pins', () => {
     expect(fitOutline(shape.slice(0, 2), [])).toBeNull()

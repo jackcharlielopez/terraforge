@@ -59,6 +59,49 @@ const distanceToOutline = (px: number, py: number, corners: Vertex[], dx: number
   return best
 }
 
+/**
+ * The score of an outline (turned already) slid by (dx, dy): how far each pin is from it, capped, with a reward for a pin on a corner. The
+ * inner loop of the search, so it works on plain arrays and does not allocate.
+ */
+function scoreShape(se: Float64Array, sn: Float64Array, pe: Float64Array, pn: Float64Array, dx: number, dy: number): number {
+  const n = se.length
+  let score = 0
+  for (let k = 0; k < pe.length; k++) {
+    const px = pe[k] - dx
+    const py = pn[k] - dy
+    let best = Infinity
+    let corner = false
+    for (let i = 0; i < n; i++) {
+      const ax = se[i]
+      const ay = sn[i]
+      const j = i + 1 === n ? 0 : i + 1
+      const vx = se[j] - ax
+      const vy = sn[j] - ay
+      const wx = px - ax
+      const wy = py - ay
+      if (wx * wx + wy * wy <= CORNER_FEET * CORNER_FEET) corner = true
+      const len2 = vx * vx + vy * vy
+      let u = len2 === 0 ? 0 : (wx * vx + wy * vy) / len2
+      u = u < 0 ? 0 : u > 1 ? 1 : u
+      const ex = wx - u * vx
+      const ey = wy - u * vy
+      const d2 = ex * ex + ey * ey
+      if (d2 < best) best = d2
+    }
+    score += Math.min(Math.sqrt(best), SCORE_CAP) - (corner ? CORNER_BONUS : 0)
+  }
+  return score
+}
+
+/** The most work (corner x pin comparisons) the search may do before it gives up, so a huge parcel on a job with many pins cannot freeze the page. */
+const WORK_LIMIT = 5e7
+/** The first pass tries turns this far apart; a valley where several pins fit at once is only a few hundredths of a degree wide, so the best few candidates (not just the best) are refined. */
+const COARSE_STEP = 0.25
+const FINE_STEP = 0.02
+const REFINE_TOP = 6
+/** Candidates this close in turn count as the same valley. */
+const SAME_VALLEY = 0.6
+
 /** True when the pins are not all on one line. */
 function spread(p: Anchor[]): boolean {
   let far: [Anchor, Anchor] | null = null
@@ -77,6 +120,13 @@ function spread(p: Anchor[]): boolean {
   return p.some((c) => Math.abs((b.e - a.e) * (a.n - c.n) - (a.e - c.e) * (b.n - a.n)) / longest >= MIN_SPREAD)
 }
 
+/** True when the outline has so many corners, and the job so many pins, that the search would take too long: it is then not attempted. */
+export function tooBigToFit(corners: Vertex[], anchors: Anchor[]): boolean {
+  const P = Math.min(anchors.length, MAX_ANCHORS)
+  const rotations = Math.floor((2 * MAX_ROTATION) / COARSE_STEP) + 1
+  return corners.length * corners.length * P * P * rotations > WORK_LIMIT
+}
+
 /**
  * Place a computed outline on the drawing using the pins found in the field. The deed gives the shape; the pins give where it is and
  * which way it points: turn it a little (old bearings) and slide it so that as many found pins as possible lie on its lines. At least
@@ -84,37 +134,55 @@ function spread(p: Anchor[]): boolean {
  */
 export function fitOutline(corners: Vertex[], anchors: Anchor[]): Placement | null {
   if (corners.length < 3 || corners.length > MAX_CORNERS || anchors.length < MIN_HITS) return null
+  if (tooBigToFit(corners, anchors)) return null
   const pins = anchors.slice(0, MAX_ANCHORS)
+  const V = corners.length
+  const P = pins.length
+  const pe = Float64Array.from(pins, (p) => p.e)
+  const pn = Float64Array.from(pins, (p) => p.n)
 
+  // Every way to put a corner on a pin, at each trial turn: keep the best-scoring one.
   const trial = (rotation: number) => {
     const shape = turn(corners, rotation)
-    let best: { score: number; dx: number; dy: number } | null = null
-    for (const p of shape) {
-      for (const a of pins) {
-        const dx = a.e - p.e
-        const dy = a.n - p.n
-        let score = 0
-        for (const b of pins) {
-          score += Math.min(distanceToOutline(b.e, b.n, shape, dx, dy), SCORE_CAP)
-          if (shape.some((q) => Math.hypot(q.e + dx - b.e, q.n + dy - b.n) <= CORNER_FEET)) score -= CORNER_BONUS
-        }
-        score += TURN_PENALTY * Math.abs(rotation)
-        if (!best || score < best.score) best = { score, dx, dy }
+    const se = Float64Array.from(shape, (p) => p.e)
+    const sn = Float64Array.from(shape, (p) => p.n)
+    let best: { score: number; dx: number; dy: number; corner: number; pin: number } | null = null
+    for (let c = 0; c < V; c++) {
+      for (let a = 0; a < P; a++) {
+        const dx = pe[a] - se[c]
+        const dy = pn[a] - sn[c]
+        const score = scoreShape(se, sn, pe, pn, dx, dy) + TURN_PENALTY * Math.abs(rotation)
+        if (!best || score < best.score) best = { score, dx, dy, corner: c, pin: a }
       }
     }
     return best ? { ...best, rotation, shape } : null
   }
 
-  let best: NonNullable<ReturnType<typeof trial>> | null = null
-  for (let r = -MAX_ROTATION; r <= MAX_ROTATION + 1e-9; r += 0.25) {
+  // First pass: every turn, with the best corner-on-pin arrangement at each.
+  const coarse: Array<NonNullable<ReturnType<typeof trial>>> = []
+  for (let r = -MAX_ROTATION; r <= MAX_ROTATION + 1e-9; r += COARSE_STEP) {
     const t = trial(r)
-    if (t && (!best || t.score < best.score)) best = t
+    if (t) coarse.push(t)
   }
-  if (!best) return null
-  const coarse = best.rotation
-  for (let r = coarse - 0.3; r <= coarse + 0.3 + 1e-9; r += 0.02) {
-    const t = trial(r)
-    if (t && t.score < best.score) best = t
+  if (coarse.length === 0) return null
+  coarse.sort((a, b) => a.score - b.score)
+  // Second pass: refine the turn around the best candidates, each with its corner kept on its pin. Candidates in the same valley count once.
+  const starts: typeof coarse = []
+  for (const c of coarse) {
+    if (starts.length >= REFINE_TOP) break
+    if (starts.every((s) => Math.abs(s.rotation - c.rotation) > SAME_VALLEY)) starts.push(c)
+  }
+  let best = coarse[0]
+  for (const start of starts) {
+    for (let r = start.rotation - COARSE_STEP; r <= start.rotation + COARSE_STEP + 1e-9; r += FINE_STEP) {
+      const shape = turn(corners, r)
+      const se = Float64Array.from(shape, (p) => p.e)
+      const sn = Float64Array.from(shape, (p) => p.n)
+      const dx = pe[start.pin] - se[start.corner]
+      const dy = pn[start.pin] - sn[start.corner]
+      const score = scoreShape(se, sn, pe, pn, dx, dy) + TURN_PENALTY * Math.abs(r)
+      if (score < best.score) best = { score, dx, dy, corner: start.corner, pin: start.pin, rotation: r, shape }
+    }
   }
 
   const vertices = best.shape.map((p) => ({ e: p.e + best.dx, n: p.n + best.dy }))

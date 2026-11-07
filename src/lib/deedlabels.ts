@@ -4,5 +4,5 @@ import type { Call } from './deedcalls.ts'
 export function label(c: Call): string {
   const deg = c.deg === null ? '?' : String(c.deg).padStart(2, '0')
   const bearing = `${c.ns} ${deg}°${String(c.min).padStart(2, '0')}'${String(c.sec).padStart(2, '0')}" ${c.ew}`
-  return `${bearing} ${c.distance.toFixed(2)}'${c.inferred ? ` (bearing from ${c.inferred})` : ''}`
+  return `${bearing} ${c.distance.toFixed(2)}'${c.inferred ? ` (${c.inferred})` : ''}`
 }

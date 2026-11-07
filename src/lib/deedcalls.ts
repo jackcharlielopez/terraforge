@@ -63,10 +63,12 @@ export function normalizeText(s: string): string {
     .replace(/\bdeg[a-z]*\.?/gi, ' deg ')
     .replace(/\bm[il1]n[a-z]*\.?/gi, ' min ')
     .replace(/\bsec[a-z]*\.?/gi, ' sec ')
+    .replace(/(\d{1,2})\s*["″”]\s*(\d{1,2})\s*["″”]/g, '$1 min $2 sec') // 52" 10" is 52' 10": OCR turned the minute mark into a quote
     .replace(/(\d)\s*[°º˚]/g, '$1 deg ')
     .replace(/(\d)\s*['′’]\s*/g, '$1 min ')
     .replace(/(\d)\s*["″”]\s*/g, '$1 sec ')
     .replace(/["“”]\s*(?=\d)/g, ' ')
+    .replace(/(?<![\w.])[58$]\s+(?=\d{1,3}\s+deg)/g, 'S ') // a lone 8, 5 or $ right before a bearing's degrees is an S that OCR misread
     .replace(/\s[-–—]\s*(?=[\d(])/g, ' ')
     .replace(/(?<=\bdeg|\bmin|\bsec)\s*[-–—]\s*/g, ' ')
     .replace(/\b(north|south)(?:east|west)\s+(?=[\d%?])/gi, '$1 ')
@@ -90,19 +92,28 @@ const toNumber = (s: string): number => {
   return Number(fixed)
 }
 
+/** Due north or south: "North 0 deg. 1963 feet", "due south 200 feet" (no east or west to read). */
+const dueNorthSouthPattern = () => new RegExp(String.raw`\b(?:due\s+)?(north|south)\b\.?\s*(?:0+\s*(?:deg)?\.?)?\s+([\d,]*\d(?:\.\d+)?)\s*(?:feet|foot|ft)\b`, 'gi')
+
 /** Every bearing-and-distance pair in the text, in order. */
 export function extractCalls(text: string): Call[] {
   const t = normalizeText(text)
   const re = bearingPattern()
-  const out: Call[] = []
+  const out: Array<Call & { at: number }> = []
   for (let m = re.exec(t); m; m = re.exec(t)) {
     const ew = direction(m[5])
     if (!ew) continue
-    const after = t.slice(re.lastIndex, re.lastIndex + 90)
-    const dm = distancePattern().exec(after)
+    const tail = t.slice(re.lastIndex, re.lastIndex + 220)
+    // only the text of this call: up to the next "thence", semicolon or bearing
+    const nextBearing = bearingPattern().exec(tail)
+    const rest = (nextBearing ? tail.slice(0, nextBearing.index) : tail).split(/\bthence\b|;/i)[0]
+    // "... reference pin at 30.38 feet, in all a distance of 1420.55 feet": the call's own length is the "in all" figure
+    const inAll = /\bin all(?:\s+a distance of)?\s*([\d,]*\d(?:\.\d+)?)\s*(?:feet|foot|ft)/i.exec(rest)
+    const dm = inAll ? { 0: inAll[0], 1: inAll[1], index: inAll.index } : distancePattern().exec(t.slice(re.lastIndex, re.lastIndex + 90))
     if (!dm) continue
     const unsure = /[%?]/.test(m[2])
     out.push({
+      at: m.index,
       ns: m[1].toUpperCase().startsWith('N') ? 'N' : 'S',
       ew,
       deg: unsure ? null : toNumber(m[2]),
@@ -113,7 +124,15 @@ export function extractCalls(text: string): Call[] {
       text: t.slice(m.index, re.lastIndex + dm[0].length).trim(),
     })
   }
-  return out
+  // due north / due south has no east or west, so the pattern above skips it; take those that were not already read as part of another bearing
+  const due = dueNorthSouthPattern()
+  for (let m = due.exec(t); m; m = due.exec(t)) {
+    if (out.some((c) => m.index >= c.at && m.index < c.at + c.text.length)) continue
+    const isZero = /^(?:due\s+)/i.test(m[0]) || /\b0/.test(m[0])
+    if (!isZero) continue
+    out.push({ at: m.index, ns: m[1].toUpperCase().startsWith('N') ? 'N' : 'S', ew: 'E', deg: 0, min: 0, sec: 0, distance: toNumber(m[2]), unsure: false, text: m[0].trim() })
+  }
+  return out.sort((a, b) => a.at - b.at).map(({ at: _at, ...call }) => call)
 }
 
 /**
@@ -125,7 +144,7 @@ export function repairByReciprocal(calls: Call[]): Call[] {
     if (!c.unsure) return c
     const mate = calls.find((d, j) => j !== i && !d.unsure && Math.abs(d.distance - c.distance) / c.distance < 0.05 && d.ns !== c.ns && d.ew !== c.ew)
     if (!mate) return c
-    return { ...c, deg: mate.deg, min: mate.min, sec: mate.sec, unsure: false, inferred: `the opposite side, ${mate.ns} ${mate.deg}° ${mate.ew}` }
+    return { ...c, deg: mate.deg, min: mate.min, sec: mate.sec, unsure: false, inferred: `bearing taken from the opposite side, ${mate.ns} ${mate.deg}° ${mate.ew}` }
   })
 }
 
@@ -163,11 +182,15 @@ const NUMBER_WORDS: Record<string, string> = { ONE: '1', TWO: '2', THREE: '3', F
  */
 export function readDescription(text: string): Tract[] {
   const flat = text.replace(/\s+/g, ' ')
-  const head = /\b(?:PARCEL|TRACT)\s+(?:NO\.?\s*)?(\d{1,2}|ONE|TWO|THREE|FOUR|FIVE)\b/gi
+  // A heading is "TRACT 1:" / "PARCEL NO. 2" in capitals, or "Parcel 2:" with a colon. A mention inside a sentence ("along the north line
+  // of said Parcel 2 the following courses") must not split the description in half.
+  const heading = String.raw`(?:(PARCEL|TRACT)\s+(?:NO\.?\s*)?(\d{1,2}|ONE|TWO|THREE|FOUR|FIVE)\b|(Parcel|Tract)\s+(?:No\.?\s*)?(\d{1,2}|One|Two|Three|Four|Five)\s*:)`
+  const head = new RegExp(String.raw`\b${heading}`, 'g')
   const starts: Array<{ at: number; label: string }> = []
   for (let m = head.exec(flat); m; m = head.exec(flat)) {
-    const n = NUMBER_WORDS[m[1].toUpperCase()] ?? m[1]
-    starts.push({ at: m.index, label: `${m[0].toLowerCase().startsWith('parcel') ? 'Parcel' : 'Tract'} ${n}` })
+    const kind = (m[1] ?? m[3]).toLowerCase() === 'parcel' ? 'Parcel' : 'Tract'
+    const n = NUMBER_WORDS[(m[2] ?? m[4]).toUpperCase()] ?? (m[2] ?? m[4])
+    starts.push({ at: m.index, label: `${kind} ${n}` })
   }
   const sections = starts.length >= 2 ? starts.map((s, i) => ({ label: s.label, text: flat.slice(s.at, starts[i + 1]?.at ?? flat.length) })) : [{ label: 'Description', text: flat }]
   return sections

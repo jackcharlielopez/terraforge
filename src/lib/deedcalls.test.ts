@@ -30,6 +30,30 @@ describe('reading calls', () => {
       ['N', 36, 30, 'E', 357.2],
     ])
   })
+  it('reads what OCR misreads in a bearing: an S read as 8, a minute mark read as a quote', () => {
+    const [a, b] = extractCalls(`along the right of way of Maple Road 8 88°37'50" E a distance of 639.39 feet; thence N. 81° 52" 10" E., 343 feet to an iron pin`)
+    expect([a.ns, a.deg, a.min, a.sec, a.ew, a.distance]).toEqual(['S', 88, 37, 50, 'E', 639.39])
+    expect([b.ns, b.deg, b.min, b.sec, b.ew, b.distance]).toEqual(['N', 81, 52, 10, 'E', 343])
+  })
+  it('takes the "in all" length when a call mentions a reference pin first', () => {
+    const [c] = extractCalls(`thence S 05°48'49" W to a rebar with cap (R.L.S.1463) reference pin at 30.38 feet, in all a distance of 1420.55 feet to a placed rebar; thence N 10 degrees E 50 feet`)
+    expect(c.distance).toBe(1420.55)
+    expect(extractCalls('thence S 05 degrees W 12 feet to a post')[0].distance).toBe(12)
+  })
+  it('does not take the next call\'s "in all" length when calls are separated by commas', () => {
+    const calls = extractCalls('S 05°48\'49" W a distance of 1,420.55 feet to a rebar, S 86°02\'23" E a distance of 230.42 feet to a post, S 05°29\'07" W passing a pin at 2686.80 feet, in all a distance of 2733.24 feet to a point')
+    expect(calls.map((c) => c.distance)).toEqual([1420.55, 230.42, 2733.24])
+  })
+  it('reads due north and due south, which have no east or west', () => {
+    const calls = extractCalls('thence North 0 deg. 1963 feet to a stake; thence South 56 deg. West 700 feet; thence due south 120 feet to a post')
+    expect(calls.map((c) => [c.ns, c.deg, c.ew, c.distance])).toEqual([
+      ['N', 0, 'E', 1963],
+      ['S', 56, 'W', 700],
+      ['S', 0, 'E', 120],
+    ])
+    // an ordinary distance after a word is not a bearing
+    expect(extractCalls('thence north along the road 200 feet')).toEqual([])
+  })
   it('leaves out a commencing tie, parenthetical witness calls, and what comes after "containing"', () => {
     const text =
       'Commencing at an iron rod; thence South 45 degrees 00 minutes 00 seconds East 98.42 feet to the TRUE POINT OF BEGINNING; thence North 10 degrees 00 minutes East 50.00 feet to a post (from which a rod lies North 7 degrees East 29.79 feet); thence South 80 degrees East 40 feet; thence South 10 degrees West 50 feet; thence North 80 degrees West 40 feet to the true point of beginning, containing 0.05 acres. Subject to a line North 12 degrees East 500 feet.'
@@ -76,6 +100,12 @@ describe('tracts', () => {
     const one = readDescription(`Being the Hood tract as of record in Book 5, page 6. ${CLEAN}`)
     expect(one).toHaveLength(1)
     expect(one[0].label).toBe('Description')
+  })
+  it('does not split a description at a mention of "Parcel 2" inside a sentence', () => {
+    const text = 'Beginning at a post; thence along the north line of said Parcel 2 the following courses: North 73 degrees West 200 feet; North 54 degrees West 60 feet; thence along the east line of Parcel 3 South 10 degrees East 90 feet; thence South 80 degrees East 250 feet to the beginning.'
+    const tracts = readDescription(text)
+    expect(tracts).toHaveLength(1)
+    expect(tracts[0].calls).toHaveLength(4)
   })
   it('drops pieces with too few calls', () => {
     expect(readDescription('PARCEL NO. 1 is described in another deed. PARCEL NO. 2: ' + CLEAN).map((t) => t.label)).toEqual(['Parcel 2'])

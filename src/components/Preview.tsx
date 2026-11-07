@@ -3,12 +3,15 @@ import { aciToHex } from '../lib/aci.ts'
 import type { Annotation } from '../lib/boundary.ts'
 import type { RefShapes } from '../lib/dxfview.ts'
 import type { CodeDef, PointMatch, Polyline, SurveyPoint } from '../lib/types.ts'
-import type { EdgeKey, Segment } from '../lib/review.ts'
 
 export type RefMode = 'generated' | 'reference' | 'both'
 
+/** Deed outlines that failed their checks are drawn dashed on this layer, so they cannot be mistaken for a trusted property line. */
+export const UNVERIFIED_LAYER = 'DEED-CHECK'
+
 /** Colour used for the reference drawing when it is overlaid on the generated one. */
-export const REF_OVERLAY_COLOR = '#2563eb'
+/** The reference drawing's colour when overlaid on ours; the value lives in index.css as --ref-overlay. */
+export const REF_OVERLAY_COLOR = 'var(--ref-overlay)'
 
 interface View {
   /** Screen pixels per drawing unit. */
@@ -31,27 +34,9 @@ interface Props {
   refHidden?: ReadonlySet<string>
   /** Text drawn along lines (bearings and distances). */
   labels?: readonly Annotation[]
-  /** Review mode: segments can be picked and points clicked, and guessed segments are marked. */
-  review?: ReviewView | null
 }
 
-export interface ReviewView {
-  segments: readonly Segment[]
-  /** Segments made by the guessing steps. */
-  guessed: ReadonlySet<EdgeKey>
-  /** Segments the drafter has looked at and kept. */
-  accepted: ReadonlySet<EdgeKey>
-  /** Segments the drafter drew in. */
-  added: ReadonlySet<EdgeKey>
-  selected: EdgeKey | null
-  tool: 'select' | 'add'
-  /** In the add tool: the first point clicked, waiting for the second. */
-  addFrom: number | null
-  onSegment: (seg: Segment) => void
-  onPoint: (index: number) => void
-}
-
-export function Preview({ points, matches, lines, defs, hiddenLayers, layerHex, reference = null, refMode = 'both', refHidden, labels = [], review = null }: Props) {
+export function Preview({ points, matches, lines, defs, hiddenLayers, layerHex, reference = null, refMode = 'both', refHidden, labels = [] }: Props) {
   const colorOf = (layer: string) => layerHex.get(layer) ?? aciToHex(7)
   const refAci = useMemo(() => new Map((reference?.layers ?? []).map((l) => [l.name, l.aci])), [reference])
   const refColor = (layer: string) => (refMode === 'both' ? REF_OVERLAY_COLOR : aciToHex(refAci.get(layer) ?? 7))
@@ -227,41 +212,10 @@ export function Preview({ points, matches, lines, defs, hiddenLayers, layerHex, 
               fill="none"
               stroke={colorOf(l.layer)}
               strokeWidth={1.75}
+              strokeDasharray={l.layer === UNVERIFIED_LAYER ? '8 5' : undefined}
               strokeLinejoin="round"
             />
           ))}
-        {review && (
-          <g className="review-layer">
-            {review.segments
-              .filter((s) => show(s.layer))
-              .map((s) => {
-                const a = points[s.a]
-                const b = points[s.b]
-                const x1 = sx(a.e), y1 = sy(a.n), x2 = sx(b.e), y2 = sy(b.n)
-                const guess = review.guessed.has(s.key) && !review.accepted.has(s.key)
-                const mine = review.added.has(s.key)
-                const sel = review.selected === s.key
-                return (
-                  <g key={s.key + s.layer}>
-                    {(guess || mine || sel || review.accepted.has(s.key)) && (
-                      <line
-                        x1={x1} y1={y1} x2={x2} y2={y2}
-                        stroke={sel ? 'var(--green)' : mine ? '#7c3aed' : guess ? 'var(--amber)' : '#16a34a'}
-                        strokeWidth={sel ? 6 : guess ? 4 : 3}
-                        strokeOpacity={sel ? 0.35 : 0.8}
-                        strokeDasharray={guess ? '6 4' : undefined}
-                        strokeLinecap="round"
-                        pointerEvents="none"
-                      />
-                    )}
-                    {review.tool === 'select' && (
-                      <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="transparent" strokeWidth={12} style={{ cursor: 'pointer' }} onClick={() => review.onSegment(s)} />
-                    )}
-                  </g>
-                )
-              })}
-          </g>
-        )}
         {show('PNTS') &&
           points.map((p, i) => (
             <circle
@@ -269,11 +223,9 @@ export function Preview({ points, matches, lines, defs, hiddenLayers, layerHex, 
               cx={sx(p.e)}
               cy={sy(p.n)}
               r={Math.max(2.5, 0.5 * px)}
-              fill={review?.addFrom === i ? 'var(--amber)' : 'var(--paper)'}
+              fill="var(--paper)"
               stroke={dotColor(matches[i])}
-              strokeWidth={review?.addFrom === i ? 3 : 1.5}
-              style={review?.tool === 'add' ? { cursor: 'crosshair' } : undefined}
-              onClick={review?.tool === 'add' ? () => review.onPoint(i) : undefined}
+              strokeWidth={1.5}
             />
           ))}
         {showNo &&

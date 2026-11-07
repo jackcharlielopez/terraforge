@@ -1,4 +1,5 @@
 import { continueLines } from './continue.ts'
+import { completeRectangles } from './rectangles.ts'
 import { fillGaps } from './gapfill.ts'
 import { reassignSpurs, removeSkewedStubs, resolveLayerDuplicates } from './layerrules.ts'
 import type { CodeDef, PointMatch, Polyline, SurveyPoint, Vertex } from './types.ts'
@@ -260,7 +261,7 @@ export function buildLinework(
   // Then decide which layer each line belongs on (spurs off a road edge, the same segment claimed by two layers) and
   // drop short skewed stubs on man-made layers.
   const placed = reassignSpurs(points, matches, defs, lines)
-  const continued = options.guess === false ? placed : continueLines(points, matches, defs, placed)
+  const continued = options.guess === false ? placed : completeRectangles(points, matches, defs, continueLines(points, matches, defs, placed))
   return removeSkewedStubs(defs, resolveLayerDuplicates(defs, continued))
 }
 

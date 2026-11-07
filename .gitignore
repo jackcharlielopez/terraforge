@@ -32,3 +32,7 @@ samples/*
 reference/*.dxf
 reference/*.pdf
 PROJECT.private.md
+
+# Local environment (build flags, future API keys): never committed. See .env.example
+.env
+.env.local

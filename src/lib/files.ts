@@ -1,3 +1,5 @@
+import { FEATURES } from './features.ts'
+
 export type FileKind = 'points' | 'deed' | 'reference' | 'unknown'
 
 const EXT: Record<Exclude<FileKind, 'unknown'>, string[]> = {
@@ -22,7 +24,7 @@ export const KIND_LABEL: Record<Exclude<FileKind, 'unknown'>, string> = {
 /** Decide what a dropped file is from its extension. */
 export function classifyFile(name: string): FileKind {
   const ext = name.includes('.') ? name.slice(name.lastIndexOf('.') + 1).toLowerCase() : ''
-  for (const kind of ['points', 'deed', 'reference'] as const) if (EXT[kind].includes(ext)) return kind
+  for (const kind of ['points', 'deed', 'reference'] as const) if (EXT[kind].includes(ext) && (kind !== 'reference' || FEATURES.compare)) return kind
   return 'unknown'
 }
 
@@ -49,8 +51,8 @@ export function groupFiles(files: File[], force?: SortableKind): { picked: Parti
   const notes: string[] = []
   const groups: Record<SortableKind, File[]> = { points: [], deed: [], reference: [] }
   for (const f of files) {
-    const kind = force ?? classifyFile(f.name)
-    if (kind === 'unknown') notes.push(`Skipped "${f.name}": expected points (.txt/.csv/.asc), a deed (.pdf or image) or a .dxf to compare.`)
+    const kind = force === 'reference' && !FEATURES.compare ? 'unknown' : (force ?? classifyFile(f.name))
+    if (kind === 'unknown') notes.push(`Skipped "${f.name}": expected points (.txt/.csv/.asc), a deed (.pdf or image)${FEATURES.compare ? ' or a .dxf to compare' : ''}.`)
     else groups[kind].push(f)
   }
   const picked: Partial<Record<Exclude<SortableKind, 'deed'>, File>> = {}
@@ -67,4 +69,27 @@ export function groupFiles(files: File[], force?: SortableKind): { picked: Parti
     else picked[kind] = first
   }
   return { picked, deeds, notes }
+}
+
+/** Files chosen on the start screen, waiting for "Start survey": nothing has been read yet. */
+export interface Staged {
+  points: File | null
+  reference: File | null
+  deeds: File[]
+}
+
+export const EMPTY_STAGED: Staged = { points: null, reference: null, deeds: [] }
+
+/**
+ * Add files to what is waiting on the start screen. A new points file or comparison drawing replaces the one already staged; deeds are
+ * added (the same name and size is not added twice). Returns the notes for anything left out.
+ */
+export function stageFiles(current: Staged, files: File[], force?: SortableKind): { staged: Staged; notes: string[] } {
+  const { picked, deeds, notes } = groupFiles(files, force)
+  const fresh = deeds.filter((f) => !current.deeds.some((d) => d.name === f.name && d.size === f.size))
+  if (fresh.length < deeds.length) notes.push(`${deeds.length - fresh.length} deed(s) were already added.`)
+  return {
+    staged: { points: picked.points ?? current.points, reference: picked.reference ?? current.reference, deeds: [...current.deeds, ...fresh] },
+    notes,
+  }
 }
