@@ -21,6 +21,21 @@ export interface Call {
   inferred?: string
   /** The call as it was read, for showing next to the scan. */
   text: string
+  /** A circular arc: the bearing and distance above are then the CHORD, and this gives the arc. Absent for a straight line. */
+  curve?: Curve
+  /** How sure the reader is of this call (the AI reader says so; rules and OCR do not). A low one is never trusted on the checks alone. */
+  confidence?: 'high' | 'medium' | 'low'
+  /** Why a call needs a look, when the reader found something wrong with it (shown as a tooltip). */
+  note?: string
+}
+
+export interface Curve {
+  /** Feet. */
+  radius: number
+  /** Which way the line turns as it is walked: left (counter-clockwise) or right (clockwise). */
+  direction: 'L' | 'R'
+  /** Feet along the arc, when the description gives it. */
+  arcLength?: number
 }
 
 export interface Tract {
@@ -28,7 +43,15 @@ export interface Tract {
   calls: Call[]
   /** The acreage the description states, if it states one. */
   statedAcres: number | null
+  /** Bearings mentioned in the text beyond the calls read: a dropped call, or a tie bearing (see `unreadBearings`). */
+  unreadBearings?: number
+  /** What kind of description this is, when the reader says (a lot reference, an easement in words, metes and bounds...). */
+  descriptionType?: DescriptionType
+  /** What the reader noted about it. */
+  notes?: string
 }
+
+export type DescriptionType = 'metes_and_bounds' | 'lot_reference' | 'aliquot' | 'centerline' | 'blanket' | 'exhibit_referenced' | 'facility_relative' | 'words_only'
 
 const levenshtein = (a: string, b: string): number => {
   const d = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array<number>(b.length).fill(0)])
@@ -73,6 +96,7 @@ export function normalizeText(s: string): string {
     .replace(/(?<=\bdeg|\bmin|\bsec)\s*[-–—]\s*/g, ' ')
     .replace(/\b(north|south)(?:east|west)\s+(?=[\d%?])/gi, '$1 ')
     .replace(/\b(north|south|n|s)\s*[-–—]\s*(?=[\d%?])/gi, '$1 ')
+    .replace(/(\d)\s*%\s*[([{|]?\s*(?=deg)/gi, '$1 1/2 ') // OCR reads the half-degree sign (58½) as a percent sign, sometimes with a stray mark after it
     .replace(/½/g, ' 1/2')
     .replace(/¼/g, ' 1/4')
     .replace(/¾/g, ' 3/4')
@@ -149,7 +173,8 @@ export function repairByReciprocal(calls: Call[]): Call[] {
 }
 
 /** The boundary calls of one description: after the (true) point of beginning, before "containing", without parenthetical witness calls. */
-export function boundaryCalls(text: string): Call[] {
+/** The part of a description that holds its boundary calls: from "commencing" or "beginning" to "containing", without parentheses. */
+function boundaryRegion(text: string): string {
   let t = text.replace(/\s+/g, ' ').replace(/§/g, 'S')
   const commencing = t.search(/\bcommencing\b/i)
   if (commencing >= 0) {
@@ -162,8 +187,21 @@ export function boundaryCalls(text: string): Call[] {
   }
   const end = t.search(/\bcontaining\b|\bcontains\b/i)
   if (end > 0) t = t.slice(0, end)
-  t = t.replace(/\([^)]*\)/g, ' ')
-  return repairByReciprocal(extractCalls(t))
+  return t.replace(/\([^)]*\)/g, ' ')
+}
+
+export function boundaryCalls(text: string): Call[] {
+  return repairByReciprocal(extractCalls(boundaryRegion(text)))
+}
+
+/**
+ * How many more bearings the text mentions than were read as calls. Every call has one "deg", so a positive number means a call the
+ * reader could not parse was dropped (a noisy scan: "North Li} x deg. East 247 feet"). It can also be a tie bearing to a found rebar,
+ * which is not a boundary call, so this is a hint to look, never a verdict.
+ */
+export function unreadBearings(text: string, calls: number): number {
+  const degrees = (normalizeText(boundaryRegion(text)).match(/\bdeg\b/g) ?? []).length
+  return Math.max(0, degrees - calls)
 }
 
 /** The acreage a description states ("containing 1.26 acres", "46-7/10 acres more or less"), or null. */
@@ -194,6 +232,9 @@ export function readDescription(text: string): Tract[] {
   }
   const sections = starts.length >= 2 ? starts.map((s, i) => ({ label: s.label, text: flat.slice(s.at, starts[i + 1]?.at ?? flat.length) })) : [{ label: 'Description', text: flat }]
   return sections
-    .map((s) => ({ label: s.label, calls: boundaryCalls(s.text), statedAcres: statedAcres(s.text) }))
+    .map((s) => {
+      const calls = boundaryCalls(s.text)
+      return { label: s.label, calls, statedAcres: statedAcres(s.text), unreadBearings: unreadBearings(s.text, calls.length) }
+    })
     .filter((t) => t.calls.length >= 2)
 }

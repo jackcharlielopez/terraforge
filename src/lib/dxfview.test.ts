@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { STARTER_CODES, buildDictionary, matchDescription } from './codes.ts'
 import { compareWithReference } from './compare.ts'
-import { buildDxf } from './dxf.ts'
+import { DEFAULT_DXF_OPTIONS, buildDxf } from './dxf.ts'
 import { cleanText, decodeDxf, readDxf, scanAttribs, shapesFromParsed } from './dxfview.ts'
 import { DEFAULT_LINEWORK, buildLinework } from './linework.ts'
 import { parsePoints } from './parse.ts'
@@ -104,7 +104,8 @@ describe('round trip: our own DXF renders back', () => {
   const matches = points.map((p) => matchDescription(p.desc, dict))
   const lines = buildLinework(points, matches, dict, DEFAULT_LINEWORK)
   it('reads back the same points and polylines', async () => {
-    const back = await readDxf(buildDxf(points, matches, dict, lines))
+    // the legend's sample lines are not part of the linework this round trip counts
+    const back = await readDxf(buildDxf(points, matches, dict, lines, { ...DEFAULT_DXF_OPTIONS, legend: false }))
     expect(new Set(back.points.map((p) => `${p.x.toFixed(2)},${p.y.toFixed(2)}`)).size).toBe(points.length)
     expect(back.edges.length).toBe(lines.length)
   })

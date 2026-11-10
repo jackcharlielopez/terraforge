@@ -15,6 +15,21 @@ export interface Traverse {
   ratio: number
   areaSqFt: number
   areaAcres: number
+  /** How many of the calls are circular arcs (their chords are the sides of `vertices`). */
+  curves: number
+}
+
+/** The angle a chord subtends at the centre of its arc, in radians. null when the radius is too small to span the chord. */
+export function arcAngle(chord: number, radius: number): number | null {
+  if (!(radius > 0) || chord > 2 * radius * 1.0005) return null
+  return 2 * Math.asin(Math.min(1, chord / (2 * radius)))
+}
+
+/** Feet along the arc of a curve call (its chord is the call's distance). */
+export function arcLengthOf(c: Call): number {
+  if (!c.curve) return c.distance
+  const t = arcAngle(c.distance, c.curve.radius)
+  return t === null ? c.distance : c.curve.radius * t
 }
 
 const azimuth = (c: Call): number => {
@@ -33,7 +48,7 @@ export function traverse(calls: Call[]): Traverse | null {
     const last = vertices[vertices.length - 1]
     const r = (azimuth(c) * Math.PI) / 180
     vertices.push({ e: last.e + c.distance * Math.sin(r), n: last.n + c.distance * Math.cos(r) })
-    perimeter += c.distance
+    perimeter += arcLengthOf(c)
   }
   const end = vertices[vertices.length - 1]
   const misclosure = Math.hypot(end.e, end.n)
@@ -42,8 +57,21 @@ export function traverse(calls: Call[]): Traverse | null {
     const q = vertices[(i + 1) % vertices.length]
     twice += p.e * q.n - q.e * p.n
   })
-  const areaSqFt = Math.abs(twice) / 2
-  return { vertices, perimeter, misclosure, ratio: misclosure < 0.005 ? Infinity : perimeter / misclosure, areaSqFt, areaAcres: areaSqFt / 43560 }
+  // Each curve changes the area by the sliver between its chord and its arc. A curve that turns right bulges to the left of its chord;
+  // walking out along the arc and back along the chord is a clockwise loop, so it counts negative in the (counter-clockwise positive)
+  // signed area: it adds to a clockwise ring and takes from a counter-clockwise one. A curve that turns left is the reverse.
+  let signed = twice / 2
+  let curves = 0
+  for (const c of usable) {
+    if (!c.curve) continue
+    const t = arcAngle(c.distance, c.curve.radius)
+    if (t === null) continue
+    curves++
+    const sliver = (c.curve.radius * c.curve.radius * (t - Math.sin(t))) / 2
+    signed += c.curve.direction === 'R' ? -sliver : sliver
+  }
+  const areaSqFt = Math.abs(signed)
+  return { vertices, perimeter, misclosure, ratio: misclosure < 0.005 ? Infinity : perimeter / misclosure, areaSqFt, areaAcres: areaSqFt / 43560, curves }
 }
 
 /** Closer than this (1 in N) counts as closing. Surveys of this kind close well beyond it; deeds that miss it were misread or do not close. */
@@ -69,6 +97,15 @@ export function assess(calls: Call[], statedAcres: number | null): Assessment {
   const unreadable = calls.filter((c) => c.deg === null).length
   if (calls.length < 3 || !t) return { verdict: 'fail', reasons: ['fewer than three calls could be read'], traverse: t }
   if (unreadable > 0) reasons.push(`${unreadable} ${unreadable === 1 ? 'bearing' : 'bearings'} could not be read`)
+  // a curve has to be possible: its radius spans its chord, and a stated arc length fits the radius and chord
+  for (const [i, c] of calls.entries()) {
+    if (!c.curve) continue
+    const t = arcAngle(c.distance, c.curve.radius)
+    if (t === null) reasons.push(`call ${i + 1}: a curve of radius ${c.curve.radius} ft cannot span a chord of ${c.distance} ft`)
+    else if (c.curve.arcLength !== undefined && Math.abs(c.curve.arcLength - c.curve.radius * t) > Math.max(0.5, 0.01 * c.curve.arcLength)) {
+      reasons.push(`call ${i + 1}: the arc length ${c.curve.arcLength} ft does not fit radius ${c.curve.radius} ft and chord ${c.distance} ft (that gives ${(c.curve.radius * t).toFixed(2)} ft)`)
+    }
+  }
   if (t.ratio < MIN_CLOSURE_RATIO) reasons.push(`does not close: ${t.misclosure.toFixed(1)} ft off over ${t.perimeter.toFixed(0)} ft (1 in ${Math.round(t.ratio)})`)
   if (statedAcres !== null && Math.abs(t.areaAcres - statedAcres) / statedAcres > MAX_ACREAGE_DIFFERENCE) {
     reasons.push(`area ${t.areaAcres.toFixed(2)} acres, but the deed says ${statedAcres}`)

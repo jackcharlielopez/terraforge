@@ -12,6 +12,7 @@ import { SidebarFooter } from './components/sidebar/SidebarFooter.tsx'
 import { SkippedLinesPanel } from './components/sidebar/SkippedLinesPanel.tsx'
 import { useDeeds } from './hooks/useDeed.ts'
 import { useDeedReading } from './hooks/useDeedReading.ts'
+import { deedsNeedingAi } from './lib/triage.ts'
 import { foundPins } from './lib/anchors.ts'
 import { useFileDrop } from './hooks/useFileDrop.ts'
 import { useSurveyDrawing } from './hooks/useSurveyDrawing.ts'
@@ -192,9 +193,10 @@ export default function App() {
   }
 
   /** Process with AI: the deeds (page images) and the points file go to the model provider through the local server; what comes back are calls, which are checked and drawn like any other read. */
+  const aiTodo = deedsNeedingAi(deeds, (id) => deedReading.stateOf(id).info?.method)
   const processWithAI = () => {
-    if (!window.confirm(`Process with AI sends ${deeds.length} deed${deeds.length === 1 ? '' : 's'} (page images) and the points file to a model provider through your local TerraForge server. Nothing else is uploaded. Continue?`)) return
-    void deedReading.processAI(deeds, pointsText)
+    if (!window.confirm(`Process with AI sends ${aiTodo.length} deed${aiTodo.length === 1 ? '' : 's'} (page images) and the points file to a model provider through your local TerraForge server, and from then on this survey is read by the AI only: OCR will not run. Nothing else is uploaded. Continue?`)) return
+    void deedReading.processAI(aiTodo, pointsText)
   }
 
   const drop = useFileDrop((files) => void handleFiles(files))
@@ -274,7 +276,7 @@ export default function App() {
         onFiles={(files, force) => void handleFiles(files, force)}
         aiAction={
           FEATURES.aiRead && phase !== 'start'
-            ? { disabled: deeds.length === 0 || !hasData, busy: deedReading.aiBusy, title: deeds.length === 0 || !hasData ? 'Needs a points file and at least one deed' : 'Sends the deeds and the points file to a model provider', onClick: processWithAI }
+            ? { disabled: aiTodo.length === 0 || !hasData, busy: deedReading.aiBusy, label: aiTodo.length > 0 && deedReading.aiMode ? `Process ${aiTodo.length} more with AI` : undefined, title: deeds.length === 0 || !hasData ? 'Needs a points file and at least one deed' : aiTodo.length === 0 ? 'Every deed has been read by the AI' : 'Sends the deeds and the points file to a model provider', onClick: processWithAI }
             : undefined
         }
         deedList={phase !== 'start' && deeds.length > 0 ? <DeedList deeds={deeds} reading={deedReading} /> : undefined}

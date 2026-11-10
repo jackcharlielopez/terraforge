@@ -2,6 +2,9 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { aciToHex } from '../lib/aci.ts'
 import type { Annotation } from '../lib/boundary.ts'
 import type { RefShapes } from '../lib/dxfview.ts'
+import { lineTypeOf } from '../lib/linetypes.ts'
+import { SYMBOL_RATIO, pointSymbols } from '../lib/symbols.ts'
+import { SymbolMark } from './SymbolMark.tsx'
 import type { CodeDef, PointMatch, Polyline, SurveyPoint } from '../lib/types.ts'
 
 export type RefMode = 'generated' | 'reference' | 'both'
@@ -12,6 +15,24 @@ export const UNVERIFIED_LAYER = 'DEED-CHECK'
 /** Colour used for the reference drawing when it is overlaid on the generated one. */
 /** The reference drawing's colour when overlaid on ours; the value lives in index.css as --ref-overlay. */
 export const REF_OVERLAY_COLOR = 'var(--ref-overlay)'
+
+/**
+ * The legend line type's dashes, in pixels. In CAD the pattern is a few feet long (drawing units at the template's line-type scale), which on
+ * screen at the zoom that fits a whole site is under a pixel, so every line would look solid. Here a pattern is stretched, keeping its
+ * rhythm, until one cycle is at least MIN_CYCLE pixels: the line type can be seen at any zoom. A pattern with no gap in it (the fence and
+ * building lines, which CAD marks with shapes the preview does not draw) stays solid.
+ */
+const LINETYPE_SCALE = 6.25
+const MIN_CYCLE = 16
+function dashes(layer: string, px: number): string | undefined {
+  const lt = lineTypeOf(layer)
+  if (!lt || !lt.pattern.some((v) => v < 0)) return undefined
+  const cycle = lt.pattern.reduce((t, v) => t + Math.abs(v), 0) * LINETYPE_SCALE * px
+  const k = cycle < MIN_CYCLE ? MIN_CYCLE / cycle : 1
+  const a = lt.pattern.map((v) => Math.abs(v) * LINETYPE_SCALE * px * k)
+  // an odd pattern (dash, gap, dash) is closed with a zero gap so SVG does not double it
+  return (a.length % 2 === 1 ? [...a, 0] : a).map((v) => v.toFixed(1)).join(' ')
+}
 
 interface View {
   /** Screen pixels per drawing unit. */
@@ -212,7 +233,7 @@ export function Preview({ points, matches, lines, defs, hiddenLayers, layerHex, 
               fill="none"
               stroke={colorOf(l.layer)}
               strokeWidth={1.75}
-              strokeDasharray={l.layer === UNVERIFIED_LAYER ? '8 5' : undefined}
+              strokeDasharray={l.layer === UNVERIFIED_LAYER ? '8 5' : dashes(l.layer, px)}
               strokeLinejoin="round"
             />
           ))}
@@ -228,6 +249,11 @@ export function Preview({ points, matches, lines, defs, hiddenLayers, layerHex, 
               strokeWidth={1.5}
             />
           ))}
+        {points.map((p, i) =>
+          pointSymbols(matches[i].codes, defs, p.desc)
+            .filter(({ symbol, layer }) => show(layer) && (SYMBOL_RATIO[symbol] ?? 1) * px >= 3)
+            .map(({ symbol, layer }) => <SymbolMark key={`s${i}${symbol}${layer}`} symbol={symbol} x={sx(p.e)} y={sy(p.n)} scale={(SYMBOL_RATIO[symbol] ?? 1) * px} color={colorOf(layer)} />),
+        )}
         {showNo &&
           points.map((p, i) => (
             <g key={'t' + i} fontSize={Math.min(px, 14)} fill="var(--text)">

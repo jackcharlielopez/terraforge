@@ -24,7 +24,7 @@ interface Props {
   /** The attached deeds, shown as a drop-down under the Deed slot. */
   deedList?: ReactNode
   /** The Process with AI button under the files; absent when the AI feature is off. */
-  aiAction?: { disabled: boolean; busy: boolean; title: string; onClick: () => void }
+  aiAction?: { disabled: boolean; busy: boolean; title: string; label?: string; onClick: () => void }
   /** A slot's own picker forces its kind; dropping on the page classifies by extension. */
   onFiles: (files: File[], force?: Exclude<FileKind, 'unknown'>) => void
   onClearDeeds: () => void
@@ -98,7 +98,7 @@ export function FileSlots({ points, deed, reference, deedList, aiAction, onFiles
       {aiAction && (
         <li className="slot-ai">
           <button type="button" className="btn btn-amber" disabled={aiAction.disabled || aiAction.busy} title={aiAction.title} onClick={aiAction.onClick}>
-            {aiAction.busy ? 'Processing with AI…' : 'Process with AI'}
+            {aiAction.busy ? 'Processing with AI…' : (aiAction.label ?? 'Process with AI')}
           </button>
         </li>
       )}

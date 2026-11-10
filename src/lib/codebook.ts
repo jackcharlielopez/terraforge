@@ -1,4 +1,5 @@
 import { nearestAci, normalizeHex } from './aci.ts'
+import { isSymbol } from './symbols.ts'
 import { normalizeSyntax, syntaxProblems } from './syntax.ts'
 import type { LineworkSyntax } from './syntax.ts'
 import type { CodeDef, LayerDef } from './types.ts'
@@ -105,6 +106,15 @@ export function parseCodeBook(raw: unknown): CodeBookResult {
     if (item.priority !== undefined) {
       if (typeof item.priority !== 'number' || !Number.isInteger(item.priority) || Math.abs(item.priority) > 100) return void warnings.push(`${where} (${code}): "priority" must be a whole number from -100 to 100, skipped.`)
       def.priority = item.priority
+    }
+    if (item.symbol !== undefined) {
+      if (typeof item.symbol === 'string' && isSymbol(item.symbol.trim())) def.symbol = item.symbol.trim()
+      else warnings.push(`${where} (${code}): "symbol" is not one of the known symbol blocks, ignored.`)
+    }
+    if (typeof item.symbolLayer === 'string' && item.symbolLayer.trim() !== '') {
+      const sl = item.symbolLayer.trim().toUpperCase()
+      if (sl.length > 255 || BAD_LAYER_CHARS.test(sl)) warnings.push(`${where} (${code}): "symbolLayer" is not a valid DXF layer name, ignored.`)
+      else def.symbolLayer = sl
     }
     if (typeof item.alongside === 'string' && item.alongside.trim() !== '') def.alongside = item.alongside.trim().toUpperCase().slice(0, 80)
     codes.set(code, def)

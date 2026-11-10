@@ -66,7 +66,7 @@
     },
     {
       "name": "V-WATR-PIPE",
-      "aci": 150,
+      "aci": 10,
       "label": "Water line"
     },
     {
@@ -83,6 +83,51 @@
       "name": "V-NODE",
       "aci": 1,
       "label": "Miscellaneous points"
+    },
+    {
+      "name": "V-POWR-POLE",
+      "aci": 120,
+      "label": "Power pole symbols"
+    },
+    {
+      "name": "V-SSWR-MHOL",
+      "aci": 160,
+      "label": "Sewer manholes"
+    },
+    {
+      "name": "V-SITE-FENC",
+      "aci": 100,
+      "label": "Fence posts and fences"
+    },
+    {
+      "name": "V-ESMT",
+      "aci": 8,
+      "label": "Easements"
+    },
+    {
+      "name": "V-ESMT-UTIL",
+      "aci": 190,
+      "label": "Utility easements"
+    },
+    {
+      "name": "V-PROP-SBCK",
+      "aci": 61,
+      "label": "Setback lines"
+    },
+    {
+      "name": "V-RWAY-LINE",
+      "aci": 40,
+      "label": "Road right of way"
+    },
+    {
+      "name": "V-SSWR-PIPE",
+      "aci": 170,
+      "label": "Sanitary sewer"
+    },
+    {
+      "name": "V-CTRL",
+      "aci": 81,
+      "label": "Control / silt fence"
     }
   ],
   "codes": [
@@ -97,7 +142,8 @@
       "label": "Iron pin found",
       "layer": "V-PROP",
       "connect": false,
-      "boundary": true
+      "boundary": true,
+      "symbol": "SPT5"
     },
     {
       "code": "IPS",
@@ -111,7 +157,8 @@
       "label": "Concrete monument found",
       "layer": "V-PROP",
       "connect": false,
-      "boundary": true
+      "boundary": true,
+      "symbol": "SPT13"
     },
     {
       "code": "PP E-T",
@@ -120,7 +167,9 @@
       "connect": true,
       "maxGap": 400,
       "maxSkip": 1000,
-      "mayCross": true
+      "mayCross": true,
+      "symbol": "CG101",
+      "symbolLayer": "V-POWR-POLE"
     },
     {
       "code": "EP",
@@ -264,19 +313,22 @@
       "code": "WV",
       "label": "Water valve",
       "layer": "V-WATR-STRC",
-      "connect": false
+      "connect": false,
+      "symbol": "SPT39"
     },
     {
       "code": "WM",
       "label": "Water meter",
       "layer": "V-WATR-STRC",
-      "connect": false
+      "connect": false,
+      "symbol": "SPT41"
     },
     {
       "code": "TOP FH",
       "label": "Fire hydrant",
       "layer": "V-WATR-STRC",
-      "connect": false
+      "connect": false,
+      "symbol": "CG152"
     },
     {
       "code": "WATERLINE",
@@ -291,6 +343,24 @@
       "layer": "V-NGAS-UNDR",
       "connect": false,
       "mayCross": true
+    },
+    {
+      "code": "PP",
+      "label": "Power pole",
+      "layer": "V-POWR-OVHD",
+      "connect": true,
+      "maxGap": 400,
+      "maxSkip": 1000,
+      "mayCross": true,
+      "symbol": "SPT19",
+      "symbolLayer": "V-POWR-POLE"
+    },
+    {
+      "code": "SS MH",
+      "label": "Sanitary sewer manhole",
+      "layer": "V-SSWR-MHOL",
+      "connect": false,
+      "symbol": "SPT49"
     }
   ],
   "maxSkip": 0,

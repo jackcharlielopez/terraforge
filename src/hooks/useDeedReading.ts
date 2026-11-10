@@ -3,7 +3,7 @@ import { inlineDeedMath, workerDeedMath } from '../lib/deedmath.ts'
 import type { Result } from '../lib/deedplace.ts'
 import type { Anchor } from '../lib/deedfit.ts'
 import { readDescription } from '../lib/deedcalls.ts'
-import type { Call, Tract } from '../lib/deedcalls.ts'
+import type { Call, DescriptionType, Tract } from '../lib/deedcalls.ts'
 import { compareCalls } from '../lib/deedcompare.ts'
 import type { Comparison } from '../lib/deedcompare.ts'
 import { outline } from '../lib/boundary.ts'
@@ -13,6 +13,12 @@ import { readDeedText } from '../lib/ocr.ts'
 import type { ReadProgress } from '../lib/ocr.ts'
 import { applyRepair } from '../lib/repair.ts'
 import type { Repair } from '../lib/repair.ts'
+import { densify, pathLength, ringArea } from '../lib/arcs.ts'
+import type { ArcSide } from '../lib/arcs.ts'
+import { closingCall, solveUnreadable } from '../lib/closing.ts'
+import type { ClosingCall } from '../lib/closing.ts'
+import { holdForAi } from '../lib/plat.ts'
+import { applyConfidence } from '../lib/triage.ts'
 import { assess } from '../lib/traverse.ts'
 import type { Assessment } from '../lib/traverse.ts'
 import type { Deed } from './useDeed.ts'
@@ -21,6 +27,13 @@ export interface ReadTract {
   label: string
   calls: Call[]
   statedAcres: number | null
+  /** What the reader says this description is, and what it noted: shown when there are no calls to draw. */
+  descriptionType?: DescriptionType
+  notes?: string
+  /** Bearings in the text beyond the calls read: a call may have been dropped. */
+  unreadBearings?: number
+  /** For a read that fails with no single-edit repair: the call that would close it (a lost or unwritten last call shows up here). */
+  closing?: ClosingCall | null
   assessment: Assessment
   /** For a read that does not close: single edits that would make it close (see `repair.ts`). Empty when none, or too many to tell. */
   repairs: Repair[]
@@ -31,6 +44,8 @@ export interface ReadState {
   progress: ReadProgress | null
   error: string
   info: { method: string; pages: number; characters: number } | null
+  /** The text looks like a plat: the free reader does not draw from it (plats are the AI reader's job). */
+  plat?: boolean
   tracts: ReadTract[]
   selected: number
 }
@@ -95,6 +110,12 @@ export function useDeedReading(deeds: Deed[], anchors: Anchor[]) {
   useEffect(() => {
     readsRef.current = reads
   }, [reads])
+  useEffect(() => {
+    if (deeds.length === 0) {
+      aiModeRef.current = false
+      setAiMode(false)
+    }
+  }, [deeds])
 
   const patch = (id: string, change: Partial<ReadState>) => setReads((r) => ({ ...r, [id]: { ...(r[id] ?? IDLE), ...change } }))
   const stateOf = (id: string): ReadState => ({ ...(reads[id] ?? IDLE), progress: progress[id] ?? null, selected: chosen[id] ?? reads[id]?.selected ?? 0 })
@@ -103,17 +124,24 @@ export function useDeedReading(deeds: Deed[], anchors: Anchor[]) {
   const toReadTracts = async (found: (Tract & { retried?: boolean })[]): Promise<ReadTract[]> => {
     const tracts: ReadTract[] = []
     for (const t of found) {
-      let assessment = assess(t.calls, t.statedAcres)
+      // one unreadable bearing the rest of the description determines is solved (and marked inferred, so it is a check)
+      const calls = solveUnreadable(t.calls, t.statedAcres)
+      let assessment = assess(calls, t.statedAcres)
       // a description the AI had to read a second time is never trusted on the checks alone: it closes now, but a model that was told what
       // was wrong could have changed a digit to fit, so the surveyor compares it with the page
       if (t.retried && assessment.verdict === 'ok') assessment = { ...assessment, verdict: 'check', reasons: ['Re-read by the AI after failing a check: compare with the page'] }
-      tracts.push({ label: t.label, calls: t.calls, statedAcres: t.statedAcres, assessment, repairs: assessment.verdict === 'fail' ? await deedMath.repair(t.calls, t.statedAcres) : [] })
+      assessment = applyConfidence(assessment, calls)
+      const repairs = assessment.verdict === 'fail' ? await deedMath.repair(calls, t.statedAcres) : []
+      tracts.push({ label: t.label, calls, statedAcres: t.statedAcres, descriptionType: t.descriptionType, notes: t.notes, unreadBearings: t.unreadBearings, assessment, repairs, closing: assessment.verdict === 'fail' && repairs.length === 0 ? closingCall(calls) : null })
     }
     return tracts
   }
 
   const [aiBusy, setAiBusy] = useState(false)
   const aiRunning = useRef(false)
+  /** Set by the first "Process with AI" and kept until every deed is removed: while it is on, OCR does not run at all. */
+  const aiModeRef = useRef(false)
+  const [aiMode, setAiMode] = useState(false)
   /** Deeds whose reads came from the AI: OCR never writes over these. */
   const aiOwned = useRef(new Set<string>())
   const aborts = useRef<Record<string, AbortController>>({})
@@ -121,7 +149,13 @@ export function useDeedReading(deeds: Deed[], anchors: Anchor[]) {
    * "Process with AI": OCR stops (the one in progress is ended and the queue waits), every deed goes out in one request with the points
    * file as context, and everything comes back in one response. Each result is checked like any other read, and the drawing fills in.
    */
-  const processAI = async (list: Deed[], points: string) => {
+  const processAI = async (requested: Deed[], points: string) => {
+    // a deed already read by the AI is never sent again; one whose AI read failed is (there is no OCR to fall back to)
+    const list = requested.filter((d) => !aiOwned.current.has(d.id))
+    if (list.length === 0) return
+    // from here on this survey is read by the AI only: OCR never runs again, for these deeds or any added later
+    aiModeRef.current = true
+    setAiMode(true)
     aiRunning.current = true
     setAiBusy(true)
     // stop OCR: ending each deed's token drops whatever it was about to report, and aborting ends the engine
@@ -153,7 +187,7 @@ export function useDeedReading(deeds: Deed[], anchors: Anchor[]) {
             return rest
           })
           aiOwned.current.add(d.id)
-          patch(d.id, { status: 'done', tracts, selected: Math.max(tracts.findIndex((t) => t.assessment.verdict !== 'fail'), 0), info: { method: 'AI', pages: r.pages, characters: 0 } })
+          patch(d.id, { status: 'done', tracts, plat: false, selected: Math.max(tracts.findIndex((t) => t.assessment.verdict !== 'fail'), 0), info: { method: 'AI', pages: r.pages, characters: 0 } })
         }),
       )
     } catch (err) {
@@ -162,12 +196,12 @@ export function useDeedReading(deeds: Deed[], anchors: Anchor[]) {
     } finally {
       aiRunning.current = false
       setAiBusy(false)
-      void drain()
     }
   }
 
   const read = async (deed: Deed) => {
-    if (aiOwned.current.has(deed.id)) return
+    // OCR never runs once the survey is in AI mode, and never over an AI read
+    if (aiModeRef.current || aiOwned.current.has(deed.id)) return
     const mine = (tokens.current[deed.id] = (tokens.current[deed.id] ?? 0) + 1)
     const current = () => tokens.current[deed.id] === mine && present.current.has(deed.id)
     const abort = (aborts.current[deed.id] = new AbortController())
@@ -179,15 +213,18 @@ export function useDeedReading(deeds: Deed[], anchors: Anchor[]) {
         if (current()) setProgress((all) => ({ ...all, [deed.id]: p }))
       }, abort.signal)
       if (!current()) return
-      const tracts = await toReadTracts(readDescription(result.text))
+      const read = await toReadTracts(readDescription(result.text))
       if (!current()) return
+      // a plat is the AI reader's job: OCR's partial guess at one is not drawn, and the deed says so
+      const plat = holdForAi(deed.name, result.text, read.map((t) => t.assessment.verdict))
+      const tracts = plat ? [] : read
       // start on the best read: one that passes, else the first
       const best = tracts.findIndex((t) => t.assessment.verdict !== 'fail')
       setChosen((c) => {
         const { [deed.id]: _gone, ...rest } = c
         return rest
       })
-      patch(deed.id, { status: 'done', tracts, selected: Math.max(best, 0), info: { method: result.method, pages: result.pages, characters: result.text.length } })
+      patch(deed.id, { status: 'done', tracts, plat, selected: Math.max(best, 0), info: { method: result.method, pages: result.pages, characters: result.text.length } })
     } catch (err) {
       if (current()) patch(deed.id, { status: 'error', error: err instanceof Error ? err.message : 'The deed could not be read.' })
     }
@@ -198,11 +235,11 @@ export function useDeedReading(deeds: Deed[], anchors: Anchor[]) {
    * page). A deed is tried once on its own; "Read again" tries it again. Deeds added while this runs are picked up in the same pass.
    */
   const drain = async () => {
-    if (draining.current || aiRunning.current) return
+    if (draining.current || aiRunning.current || aiModeRef.current) return
     draining.current = true
     try {
       for (;;) {
-        if (aiRunning.current) break
+        if (aiRunning.current || aiModeRef.current) break
         const next = deedsRef.current.find((d) => !attempted.current.has(d.id) && (readsRef.current[d.id]?.status ?? 'idle') === 'idle')
         if (!next) break
         attempted.current.add(next.id)
@@ -241,7 +278,10 @@ export function useDeedReading(deeds: Deed[], anchors: Anchor[]) {
           if (!tr || t.calls.filter((c) => c.deg !== null).length < 3) return []
           // a description that closes ends where it began: its last corner repeats the first
           const closes = tr.misclosure < Math.max(2, tr.perimeter / 100)
-          return [{ key: keyOf(d.id, i), name: `${d.name} (${t.label})`, trusted: t.assessment.verdict !== 'fail', closes, corners: closes ? tr.vertices.slice(0, -1) : tr.vertices }]
+          // the curved sides, by corner: the traverse skipped calls with no readable bearing, so count the readable ones
+          const arcs: ArcSide[] = []
+          t.calls.filter((c) => c.deg !== null).forEach((c, k) => c.curve && arcs.push({ index: k, radius: c.curve.radius, direction: c.curve.direction }))
+          return [{ key: keyOf(d.id, i), name: `${d.name} (${t.label})`, trusted: t.assessment.verdict !== 'fail', closes, arcs, corners: closes ? tr.vertices.slice(0, -1) : tr.vertices }]
         }),
       ),
     [deeds, reads],
@@ -281,7 +321,12 @@ export function useDeedReading(deeds: Deed[], anchors: Anchor[]) {
           o.trusted ? 'deed' : 'deed-check',
           o.closes,
         )
-        return b ? [b] : []
+        if (!b) return []
+        // curved sides are drawn as arcs; the labels stay on the chords, and the area and length follow the arcs
+        const arcs = items.find((x) => x.key === o.key)?.arcs ?? []
+        if (arcs.length === 0) return [b]
+        const vertices = densify(b.polyline.vertices, o.closes, arcs)
+        return [{ ...b, polyline: { ...b.polyline, vertices }, area: o.closes ? ringArea(vertices) : b.area, perimeter: pathLength(vertices, o.closes) }]
       }),
     // `outlines` is rebuilt each render; what decides the result is the placement and which are hidden
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -337,6 +382,7 @@ export function useDeedReading(deeds: Deed[], anchors: Anchor[]) {
     read,
     processAI,
     aiBusy,
+    aiMode,
     select: (id: string, tract: number) => setChosen((c) => ({ ...c, [id]: tract })),
     useRepair,
     agreements,

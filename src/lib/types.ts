@@ -75,6 +75,12 @@ export interface CodeDef {
   spurLayer?: string
   /** How many degrees off the axis a segment must be to count as a spur (default 35). */
   spurAngle?: number
+  /**
+   * A point with this code gets this symbol block (see `symbols.ts`: SPT5 is the iron pin found, CG152 the hydrant...) placed on it,
+   * on `symbolLayer` when that differs from `layer` (a pole's line is on V-POWR-OVHD but its symbol on V-POWR-POLE).
+   */
+  symbol?: string
+  symbolLayer?: string
   /** When the same segment would be drawn on two layers, the layer with the higher priority keeps it (default 0; equal = both). */
   priority?: number
 }

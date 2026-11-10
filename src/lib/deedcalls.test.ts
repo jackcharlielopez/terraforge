@@ -111,3 +111,30 @@ describe('tracts', () => {
     expect(readDescription('PARCEL NO. 1 is described in another deed. PARCEL NO. 2: ' + CLEAN).map((t) => t.label)).toEqual(['Parcel 2'])
   })
 })
+
+describe('half degrees, as OCR reads old deeds', () => {
+  // invented text in the style of a 1960s deed: whole and half degrees, no minutes
+  it('reads a half degree that OCR turned into a percent sign, even with a stray mark after it', () => {
+    const t = readDescription('Beginning at a stake; thence South 20 deg. West 100 feet, North 58% deg. East 50 feet, North 23% (\ndeg. East 40 feet, South 19% deg. West 60 feet to the beginning, containing 1 acre.')
+    const calls = t[0].calls
+    expect(calls.map((c) => [c.ns, c.deg, c.min, c.ew, c.distance])).toEqual([
+      ['S', 20, 0, 'W', 100],
+      ['N', 58.5, 0, 'E', 50],
+      ['N', 23.5, 0, 'E', 40],
+      ['S', 19.5, 0, 'W', 60],
+    ])
+  })
+})
+
+describe('unreadBearings', () => {
+  it('is 0 when every bearing in the description became a call', () => {
+    const t = readDescription('Beginning at a stake; thence South 20 deg. West 100 feet, North 70 deg. East 50 feet, North 20 deg. East 90 feet to the beginning, containing 1 acre.')
+    expect(t[0].calls).toHaveLength(3)
+    expect(t[0].unreadBearings).toBe(0)
+  })
+  it('counts a bearing the reader could not turn into a call (a garbled distance)', () => {
+    const t = readDescription('Beginning at a stake; thence South 20 deg. West 100 feet, North 70 deg. East 50 feet, North 40 deg. East ~~ xx feet, North 20 deg. East 90 feet to the beginning, containing 1 acre.')
+    expect(t[0].calls).toHaveLength(3)
+    expect(t[0].unreadBearings).toBe(1)
+  })
+})
